@@ -41,7 +41,7 @@ export async function createApplicationScene({
       else window.__GOOGLE_MAPS_API_KEY__ = previousKey;
     });
   }
-  loaderStatus.textContent = 'Configuring viewer...';
+  loaderStatus.textContent = 'กำลังเตรียมแผนที่…';
   // Provider attribution stays visible, including clean-view and recording.
   const creditContainer = document.createElement('div');
   creditContainer.id = 'cesium-credits';
@@ -58,10 +58,8 @@ export async function createApplicationScene({
   defer(installTrackpadPinchZoom(viewer));
   registerDataCredits(viewer, credits);
   configureCreditKeyboardAccess(document);
-  loaderStatus.textContent =
-    googleApiKey || cesiumToken
-      ? 'Loading Google 3D Tiles...'
-      : 'Loading the keyless globe...';
+  // bkk-watch: the preloader speaks Thai; which globe loads is a detail.
+  loaderStatus.textContent = 'กำลังโหลดแผนที่…';
   const photoreal = await loadPhotorealisticTileset(Cesium, {
     googleApiKey,
     cesiumToken,
@@ -88,12 +86,12 @@ export async function createApplicationScene({
         tileError,
       );
       const tileErrorDetail = describeError(tileError);
-      loaderStatus.textContent = `Google 3D Tiles unavailable (${tileErrorDetail}). Loading the keyless globe...`;
+      loaderStatus.textContent = `โหลดแผนที่ 3 มิติไม่ได้ (${tileErrorDetail}) กำลังใช้แผนที่สำรอง…`;
     }
     viewer.scene.globe.show = true;
   }
 
-  loaderStatus.textContent = 'Initializing systems...';
+  loaderStatus.textContent = 'กำลังเริ่มระบบ…';
 
   const mapStackController = new MapController(viewer, {
     requestRender: governorRequestRender,

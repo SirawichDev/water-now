@@ -1,6 +1,6 @@
 import { catalogControlServices } from './catalog.js';
 import { StyleManager } from '../ui/composition.js';
-import { flyToAustin } from '../camera.js';
+import { flyToThailand } from '../camera.js';
 import { initCockpitCloudEffects } from '../cockpitCloudEffects.js';
 
 /** Construct the existing controls and camera presentation. */
@@ -39,12 +39,12 @@ export function createApplicationControls({
   });
   defer(() => cockpitCloudEffects?.destroy());
 
-  // If no share link state, do default fly-to Austin
+  // bkk-watch: without share-link state, open over Thailand.
   if (!styleManager.hasShareState) {
-    loaderStatus.textContent = 'Flying to Austin, TX...';
-    defer(flyToAustin(viewer));
+    loaderStatus.textContent = 'กำลังเปิดแผนที่ประเทศไทย…';
+    defer(flyToThailand(viewer));
   } else {
-    loaderStatus.textContent = 'Restoring shared view...';
+    loaderStatus.textContent = 'กำลังเปิดมุมมองล่าสุด…';
   }
 
   return { styleManager, weatherEffects, cockpitCloudEffects };

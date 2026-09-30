@@ -1,0 +1,42 @@
+{
+  "capturedFrom": "https://dds.bangkok.go.th/cctv.php",
+  "capturedAt": "2026-09-28",
+  "markers": [
+    {
+      "lat": 13.8712025,
+      "lon": 100.6009522,
+      "name": "บางเขนใหม่",
+      "imagePath": "/cctv-image/cctv1.jpg"
+    },
+    {
+      "lat": 13.7638088,
+      "lon": 100.4880244,
+      "name": "สะพานพระปิ่นเกล้า",
+      "imagePath": "/cctv-image/cctv2.jpg"
+    },
+    {
+      "lat": 13.66605,
+      "lon": 100.5814148,
+      "name": "บางนา",
+      "imagePath": "/cctv/cctv3.jpg"
+    },
+    {
+      "lat": 13.8504178,
+      "lon": 100.2143995,
+      "name": "คลองสวนแดน1",
+      "imagePath": "/cctv-image/cctv4.jpg"
+    },
+    {
+      "lat": 13.7626065,
+      "lon": 100.4419398,
+      "name": "คลองชักพระ",
+      "imagePath": "/cctv-image/cctv5.jpg"
+    },
+    {
+      "lat": 13.7471152,
+      "lon": 100.3203025,
+      "name": "คลองทวีวัฒนา",
+      "imagePath": "/cctv-image/cctv6.jpg"
+    }
+  ]
+}

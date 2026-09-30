@@ -17,7 +17,7 @@ import {
   CCTV_MAX_SOURCES_CEILING,
 } from './cctv/constants.js';
 import { sanitizeCctvRangeHeader } from './cctv/range.js';
-import { createHlsPuller } from './cctv/stream.js';
+import { createHlsPuller, HLS_LIMITS } from './cctv/stream.js';
 import { googleServerApiKey } from './places/google-key.js';
 export { CCTV_FRAME_FETCH_TIMEOUT_MS, fetchCctvImageFromUpstream };
 /**
@@ -42,7 +42,19 @@ export function cctvProxy({ sourceRoot = process.cwd() } = {}) {
    * for any catalog the proxy can actually serve. */
   const HEALTH_MAX_ENTRIES = CCTV_MAX_SOURCES_CEILING;
   /** Live HLS strategies (see ./cctv/stream.js). Shared across dev and preview. */
-  const puller = createHlsPuller();
+  // bkk-watch: upstream caps live HLS at 2 sessions to bound memory
+  // (24 MiB each). The Bangkok camera wall plays every camera at once, so the
+  // cap is an env knob here; each session still self-limits its buffer.
+  const maxSessions = Number(process.env.CCTV_HLS_MAX_SESSIONS);
+  const puller = createHlsPuller({
+    limits: {
+      ...HLS_LIMITS,
+      sessions:
+        Number.isFinite(maxSessions) && maxSessions > 0
+          ? Math.floor(maxSessions)
+          : 40,
+    },
+  });
 
   /** Update the health entry for a camera, evicting the oldest entry if at capacity. */
   const setHealth = (cameraId, patch) => {

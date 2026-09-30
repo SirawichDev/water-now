@@ -19,3 +19,7 @@ output/
 3d-models/
 pinokio/ENVIRONMENT
 pinokio/.installed
+
+# bkk-watch alert service
+alert-service/.env
+alert-service/data/

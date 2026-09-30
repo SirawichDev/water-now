@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- น้ำท่วมตอนนี้: a gauge drawn as a tank. Blue water up to the dashed bank
+       line, red for the water standing over it. -->
+  <defs><clipPath id="c"><circle cx="32" cy="32" r="26"/></clipPath></defs>
+  <circle cx="32" cy="32" r="29" fill="#fff"/>
+  <g clip-path="url(#c)">
+    <path d="M0 24 Q4 20 8 24 T16 24 T24 24 T32 24 T40 24 T48 24 T56 24 T64 24 V36 H0Z" fill="#D92D20"/>
+    <rect x="0" y="36" width="64" height="30" fill="#175CD3"/>
+  </g>
+  <path d="M9 36H55" stroke="#15202B" stroke-width="2" stroke-dasharray="4 3"/>
+  <circle cx="32" cy="32" r="27.5" fill="none" stroke="#15202B" stroke-width="3"/>
+</svg>

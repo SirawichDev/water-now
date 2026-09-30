@@ -169,7 +169,10 @@
       "scripts/google-server-key.mjs",
       "src/data/cctvFootprint.js",
       "src/sources/cctvTypes.js",
-      "src/sources/httpBody.js"
+      "src/sources/httpBody.js",
+      "server/providers/cctv/itic.js",
+      "server/providers/cctv/dds.js",
+      "server/providers/cctv/egat.js"
     ],
     "external": []
   },
@@ -862,6 +865,20 @@
       "src/data/inputOwnership.js"
     ],
     "external": ["cesium"]
+  },
+  "bkk-watch": {
+    "exports": ["./layers/bkk"],
+    "modules": [
+      "src/layers/bkk/index.js",
+      "src/layers/bkk/pointLayer.js",
+      "src/layers/bkk/source.js",
+      "src/layers/bkk/newsPanel.js",
+      "src/data/pickRegistry.js",
+      "src/data/inputOwnership.js",
+      "src/layers/bkk/camPanel.js",
+      "src/layers/cctv/videoPlayback.js"
+    ],
+    "external": ["cesium", "hls.js"]
   },
   "earthquakes": {
     "exports": ["./layers/earthquakes"],
@@ -1961,7 +1978,23 @@
       "src/layers/recentImagery/thumbnails.js",
       "src/maps/imageryHost.js",
       "src/ui/recentImagery.js",
-      "src/ui/imageryBoxTool.js"
+      "src/ui/imageryBoxTool.js",
+      "src/layers/bkk/index.js",
+      "src/layers/bkk/pointLayer.js",
+      "src/layers/bkk/source.js",
+      "src/layers/bkk/newsPanel.js",
+      "src/layers/bkk/camPanel.js",
+      "src/bkk/thaiShell.js",
+      "src/bkk/dom.js",
+      "src/bkk/mapOverlay.js",
+      "src/bkk/thaiDetail.js",
+      "src/bkk/depthLadder.js",
+      "src/bkk/thaiDock.js",
+      "src/bkk/floodMath.js",
+      "src/bkk/folk.js",
+      "src/bkk/folkUi.js",
+      "src/bkk/reportSheet.js",
+      "src/bkk/flowOverlay.js"
     ],
     "external": [
       "hls.js",
@@ -2422,7 +2455,12 @@
       "src/layers/recentImagery/catalog.js",
       "src/layers/recentImagery/rendering.js",
       "src/layers/recentImagery/thumbnails.js",
-      "src/maps/imageryHost.js"
+      "src/maps/imageryHost.js",
+      "src/layers/bkk/index.js",
+      "src/layers/bkk/pointLayer.js",
+      "src/layers/bkk/source.js",
+      "src/layers/bkk/newsPanel.js",
+      "src/layers/bkk/camPanel.js"
     ],
     "external": [
       "hls.js",
@@ -2731,7 +2769,8 @@
       "src/sources/httpBody.js",
       "src/layers/perimeters/source.js",
       "src/layers/perimeters/records.js",
-      "src/layers/submarineCables/bundledSource.js"
+      "src/layers/submarineCables/bundledSource.js",
+      "src/layers/bkk/source.js"
     ],
     "external": []
   },

@@ -39,7 +39,8 @@ test('catalogs construct distinct layers and classification from their supplied 
     signal: b.signal,
     surface: fixtureSurface(b.signal),
   });
-  assert.equal(first.layers.length, 29);
+  // 29 upstream layers + bkk-water, bkk-outages, bkk-news, bkk-cams.
+  assert.equal(first.layers.length, 33);
   assert.ok(first.get('local-adsb'), 'Local ADS-B is registered');
   assert.deepEqual(
     first.metadata.find(({ id }) => id === 'local-adsb'),

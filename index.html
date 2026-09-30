@@ -1,14 +1,33 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="th">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>God's Eye View</title>
-  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+  <title>น้ำท่วมตอนนี้ — ระดับน้ำ ข่าว และกล้องสดทั่วไทย</title>
+  <meta name="description" content="ดูว่าตอนนี้แม่น้ำและคลองจุดไหนในประเทศไทยล้นตลิ่ง พร้อมข่าวน้ำท่วมและกล้องสดในพื้นที่" />
+  <meta name="theme-color" content="#ffffff" />
+  <link rel="icon" type="image/svg+xml" href="/bkk-logo.svg" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/src/bkk/thaiShell.css" />
+  <!-- bkk-watch: choose simple/advanced mode before first paint, and skip
+       GEV's first-launch mission picker in simple mode. -->
+  <script>
+    (function () {
+      var mode = 'simple';
+      try { mode = localStorage.getItem('bkkwatch:mode') || 'simple'; } catch (e) {}
+      if (mode !== 'advanced') {
+        document.documentElement.classList.add('th-simple');
+        // The preloader is drawn in the saved theme, before the app mounts.
+        var theme = 'light';
+        try { theme = localStorage.getItem('bkkwatch:theme') === 'dark' ? 'dark' : 'light'; } catch (e) {}
+        document.documentElement.dataset.thTheme = theme;
+        try { sessionStorage.setItem('gev:first-run-mission-session:v1', 'dismissed'); } catch (e) {}
+      }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=IBM+Plex+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet" />
   <!-- Icon font subset to the glyphs this app renders. Keep `icon_names` in sync
        with the sources: src/materialSymbolsSubset.test.mjs fails when a source
        names a glyph this list is missing, because a missing glyph does not draw

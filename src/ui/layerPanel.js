@@ -18,6 +18,10 @@ const FEED_STATE_LABELS = Object.freeze({
 // Presentation order is independent of catalog registration and startup order.
 const PANEL_GROUPS = [
   {
+    label: 'Bangkok Alerts',
+    ids: ['bkk-water', 'bkk-outages', 'bkk-news', 'bkk-cams'],
+  },
+  {
     label: 'Movement',
     ids: [
       'satellites',
@@ -76,6 +80,10 @@ const PANEL_LABELS = {
   'alpr-cameras': 'Mapped ALPR Cameras',
   'local-datacenters': 'Data Centers',
   'local-firms': 'Active Fires',
+  'bkk-water': 'ระดับน้ำทั่วประเทศ',
+  'bkk-outages': 'ดับไฟตามแผน (MEA)',
+  'bkk-news': 'ข่าวตามโซน',
+  'bkk-cams': 'กล้องสด (แบบง่าย)',
 };
 
 function panelLabel(layer) {

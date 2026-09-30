@@ -19,9 +19,18 @@ import {
   loadCalgarySourcesFromOpenData,
   loadDelDOTSourcesFromOpenData,
 } from './sources.js';
+import { loadIticSourcesFromFeed } from './itic.js';
+import { loadDdsFloodSources } from './dds.js';
+import { loadEgatDamSources } from './egat.js';
 
 /** Env kill switch: unset or anything but "0" means enabled. */
 const envEnabled = (name) => String(process.env[name] || '1').trim() !== '0';
+
+/** bkk-watch: CCTV_THAILAND_ONLY=1 (set in .env) loads only Thailand packs. */
+const THAILAND_PACKS = new Set(['itic-thailand', 'dds-flood', 'egat-dams']);
+const packAllowed = (pack) =>
+  String(process.env.CCTV_THAILAND_ONLY || '').trim() !== '1' ||
+  THAILAND_PACKS.has(pack.name);
 
 /**
  * Live open-data packs, in merge order. Adding a region is one entry here
@@ -91,6 +100,21 @@ const LIVE_PACKS = [
     name: 'deldot',
     enabled: () => envEnabled('CCTV_DELDOT_ENABLED'),
     load: loadDelDOTSourcesFromOpenData,
+  },
+  {
+    name: 'itic-thailand',
+    enabled: () => envEnabled('CCTV_ITIC_ENABLED'),
+    load: loadIticSourcesFromFeed,
+  },
+  {
+    name: 'dds-flood',
+    enabled: () => envEnabled('CCTV_DDS_ENABLED'),
+    load: loadDdsFloodSources,
+  },
+  {
+    name: 'egat-dams',
+    enabled: () => envEnabled('CCTV_EGAT_ENABLED'),
+    load: loadEgatDamSources,
   },
 ];
 /**
@@ -198,7 +222,9 @@ export function createCctvCatalog({ sourceRoot = process.cwd() } = {}) {
           // failed pack instead of rejecting the whole refresh.
           LIVE_PACKS.map((pack) =>
             Promise.resolve().then(() =>
-              pack.enabled() ? pack.load({ sourceRoot }) : [],
+              packAllowed(pack) && pack.enabled()
+                ? pack.load({ sourceRoot })
+                : [],
             ),
           ),
         )

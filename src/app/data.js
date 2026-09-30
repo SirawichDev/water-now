@@ -1,6 +1,7 @@
 import { LayerLifecycle } from '../data/lifecycle.js';
 import { LayerPresentation } from './layerPresentation.js';
 import { createCyberSonarScene } from '../cyberSonarScene.js';
+import { mountThaiShell } from '../bkk/thaiShell.js';
 /** Register the application layer catalog before allowing state restoration. */
 export function createApplicationData({
   scene: { viewer, mapStackController },
@@ -56,6 +57,20 @@ export function createApplicationData({
   }
   presentation.mount(document.getElementById('data-toggles'));
   styleManager.attachDataManager(dataManager);
+  // bkk-watch: the Bangkok alert layers are local-only (never restored from
+  // share state), so switch them on for every session.
+  for (const id of ['bkk-water', 'bkk-outages', 'bkk-news'])
+    dataManager
+      .setEnabled(id, true)
+      ?.catch?.((e) => console.warn(`[bkk-watch] ${id} did not start:`, e));
+  // bkk-watch: the Thai-first flood overview that opens by default.
+  if (globalThis.document?.body && typeof matchMedia === 'function')
+    mountThaiShell({
+      viewer,
+      dataManager,
+      hud: styleManager.hud,
+      mapStackController,
+    });
   defer(createCyberSonarScene(viewer, dataManager));
 
   return { dataManager, catalog, presentation };

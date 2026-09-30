@@ -63,10 +63,12 @@ test('root config retains existing named exports and standalone provider order',
     assert.equal(compatibility[name], value, name);
   const config = standaloneConfig({ mode: 'test' });
   assert.deepEqual(
-    config.plugins.slice(2, -1).map((plugin) => plugin.name),
+    config.plugins.slice(2, -2).map((plugin) => plugin.name),
     providers.localProviderPlugins().map((plugin) => plugin.name),
   );
-  assert.equal(config.plugins.at(-2).name, 'gev-key-setup');
+  assert.equal(config.plugins.at(-3).name, 'gev-key-setup');
+  // bkk-watch proxy sits after the upstream providers, before the 404 catch-all.
+  assert.equal(config.plugins.at(-2).name, 'bkk-alert-proxy');
   assert.equal(config.plugins.at(-1).name, 'api-not-found');
 });
 

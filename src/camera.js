@@ -80,3 +80,14 @@ export function flyToAustin(viewer) {
     if (!viewer.isDestroyed()) viewer.camera.cancelFlight();
   };
 }
+
+/** bkk-watch: open looking straight down at all of Thailand. */
+export function flyToThailand(viewer) {
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(98.6, 13.1, 2_350_000),
+    orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 },
+  });
+  return () => {
+    if (!viewer.isDestroyed()) viewer.camera.cancelFlight();
+  };
+}

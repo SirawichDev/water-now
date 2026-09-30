@@ -23,6 +23,13 @@ import { createApplicationLocalAdsb } from './layers/localAdsb.js';
 import { createApplicationAwareness } from './layers/militaryAwareness.js';
 import { createApplicationFirms } from './layers/firms.js';
 import { createApplicationEarthquakes } from './layers/earthquakes.js';
+import {
+  createBkkWaterLayer,
+  createBkkOutageLayer,
+  createBkkNewsLayer,
+  createBkkCamsLayer,
+} from '../layers/bkk/index.js';
+import { overlayHost } from './layers/overlayHost.js';
 import { createApplicationFirePerimeters } from './layers/perimeters.js';
 import { createApplicationCables } from './layers/submarineCables.js';
 import { createInfrastructureLayers } from '../data/infrastructure.js';
@@ -55,6 +62,10 @@ const SOURCE_METHODS = Object.freeze({
   earthquakes: ['getSnapshot'],
   'fire-perimeters': ['getSnapshot'],
   cables: ['fetch'],
+  'bkk-water': ['getSnapshot'],
+  'bkk-outages': ['getSnapshot'],
+  'bkk-news': ['getSnapshot'],
+  'bkk-cams': ['getSnapshot'],
 });
 
 /**
@@ -63,6 +74,12 @@ const SOURCE_METHODS = Object.freeze({
  */
 export const LOCAL_ONLY_LAYER_METADATA = Object.freeze([
   Object.freeze({ id: 'local-adsb', disposition: 'local-only' }),
+  // bkk-watch: served by this machine's alert service, and switched on at
+  // startup, so they stay out of upstream's share-link token ledger.
+  Object.freeze({ id: 'bkk-water', disposition: 'local-only' }),
+  Object.freeze({ id: 'bkk-outages', disposition: 'local-only' }),
+  Object.freeze({ id: 'bkk-news', disposition: 'local-only' }),
+  Object.freeze({ id: 'bkk-cams', disposition: 'local-only' }),
 ]);
 
 /** Serialization metadata for every layer the application catalog constructs. */
@@ -143,6 +160,10 @@ export function createApplicationCatalog({
           displayParams: () => flights.getParams(),
           ...(resolveAsset ? { resolveAsset } : {}),
         }),
+        createBkkWaterLayer({ source: sources['bkk-water'], overlayHost }),
+        createBkkOutageLayer({ source: sources['bkk-outages'], overlayHost }),
+        createBkkNewsLayer({ source: sources['bkk-news'], overlayHost }),
+        createBkkCamsLayer({ source: sources['bkk-cams'], overlayHost }),
         createApplicationEarthquakes({ source: sources.earthquakes }),
         createApplicationFirePerimeters({
           source: sources['fire-perimeters'],

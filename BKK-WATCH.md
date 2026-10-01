@@ -62,6 +62,8 @@ Hours from before the service started recording only contain the backfilled stat
 
 ## Run
 
+`make start` runs both below in one terminal (Ctrl+C stops both); `make` lists the other commands (`up`/`down` for the background, `status`, `logs`, `test`). By hand:
+
 ```sh
 npm run alert        # alert service at 127.0.0.1:4191 (polls ThaiWater and MEA, runs the Telegram bot)
 npm run dev          # map at http://localhost:4173 (add `-- --port 4190` to pick a port) (proxies /api/bkk/* to the alert service)

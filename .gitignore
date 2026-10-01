@@ -23,3 +23,6 @@ pinokio/.installed
 # bkk-watch alert service
 alert-service/.env
 alert-service/data/
+
+# make up / make down: process ids and logs
+.run/

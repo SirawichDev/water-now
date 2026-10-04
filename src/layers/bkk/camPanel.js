@@ -6,6 +6,10 @@ import { attachCctvVideo } from '../cctv/videoPlayback.js';
 import { ensurePanelCss, sharePlayerCorner } from './newsPanel.js';
 
 const STILL_REFRESH_MS = 30_000;
+// A live stream normally plays within a second or two; past this the panel
+// says it is still trying instead of showing a silent black box.
+const SLOW_MS = 8000;
+const UNAVAILABLE = 'กล้องนี้ไม่มีภาพในขณะนี้ · ลองกล้องใกล้เคียง ▶';
 
 function distanceM(a, b) {
   const rad = Math.PI / 180;
@@ -44,6 +48,7 @@ export function createCamPanel({ getCameras, flyTo }) {
   let current = null;
   let playback = null;
   let stillTimer = null;
+  let slowTimer = null;
   const history = [];
 
   function stop() {
@@ -51,6 +56,8 @@ export function createCamPanel({ getCameras, flyTo }) {
     playback = null;
     clearInterval(stillTimer);
     stillTimer = null;
+    clearTimeout(slowTimer);
+    slowTimer = null;
     if (still.src) URL.revokeObjectURL(still.src);
     still.removeAttribute('src');
   }
@@ -71,7 +78,7 @@ export function createCamPanel({ getCameras, flyTo }) {
       still.src = URL.createObjectURL(blob);
       meta.textContent = `ภาพนิ่ง อัปเดตทุก ${STILL_REFRESH_MS / 1000} วินาที · ${camera.provider}`;
     } catch {
-      if (current === camera) meta.textContent = 'กล้องนี้ใช้ไม่ได้ในขณะนี้';
+      if (current === camera) meta.textContent = UNAVAILABLE;
     }
   }
 
@@ -93,19 +100,26 @@ export function createCamPanel({ getCameras, flyTo }) {
       corner.opened();
       return;
     }
+    slowTimer = setTimeout(() => {
+      if (current === camera)
+        meta.textContent =
+          'ยังเชื่อมต่อไม่ได้ กล้องอาจปิดอยู่ · ลองกล้องใกล้เคียง ▶';
+    }, SLOW_MS);
     playback = attachCctvVideo(
       video,
       `/api/cctv/media/${encodeURIComponent(camera.id)}`,
       'hls',
       {
         onFailure: () => {
-          meta.textContent = 'กล้องนี้ใช้ไม่ได้ในขณะนี้';
+          clearTimeout(slowTimer);
+          if (current === camera) meta.textContent = UNAVAILABLE;
         },
       },
     );
     corner.opened();
   }
   video.addEventListener('playing', () => {
+    clearTimeout(slowTimer);
     if (current) meta.textContent = `● ถ่ายทอดสด · ${current.provider}`;
   });
 

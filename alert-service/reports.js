@@ -25,6 +25,11 @@ export const REPORT_CHOICES = Object.freeze({
     { id: 'open', label: 'ยังเปิดขาย' },
     { id: 'closed', label: 'ปิดแล้ว' },
   ]),
+  // Hail is not a spot: hail.js turns these into zones with other evidence.
+  hail: Object.freeze([
+    { id: 'seen', label: 'เห็นลูกเห็บตก' },
+    { id: 'none', label: 'ไม่มีลูกเห็บ' },
+  ]),
 });
 const CHOICE = Object.fromEntries(
   Object.entries(REPORT_CHOICES).map(([kind, list]) => [
@@ -76,54 +81,40 @@ export function groupSpots(rows) {
     }));
 }
 
-export function createReports({ db, now = () => Date.now() }) {
-  db.exec(`CREATE TABLE IF NOT EXISTS reports (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    lat        REAL NOT NULL,
-    lon        REAL NOT NULL,
-    level      TEXT NOT NULL,
-    sender     TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  )`);
-  // Tables from before trash and food reports hold depth levels only.
-  const columns = new Set(
-    db
-      .prepare('PRAGMA table_info(reports)')
-      .all()
-      .map((c) => c.name),
-  );
-  if (!columns.has('kind'))
-    db.exec(
-      "ALTER TABLE reports ADD COLUMN kind TEXT NOT NULL DEFAULT 'depth'",
-    );
-  if (!columns.has('batch'))
-    db.exec('ALTER TABLE reports ADD COLUMN batch TEXT');
-  const q = {
-    add: db.prepare(
-      'INSERT INTO reports (lat, lon, kind, level, sender, batch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ),
-    depthSince: db.prepare(
+/**
+ * @param {object} opts
+ * @param {object} opts.db    a store from store.js (it creates the table)
+ * @param {string} [opts.salt] keeps sender hashes stable across processes
+ */
+export function createReports({ db, now = () => Date.now(), salt: secret }) {
+  const SQL = {
+    add: 'INSERT INTO reports (lat, lon, kind, level, sender, batch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    depthSince:
       "SELECT id, lat, lon, level, created_at FROM reports WHERE kind = 'depth' AND created_at > ? ORDER BY created_at DESC, id DESC",
-    ),
-    spotsSince: db.prepare(
-      "SELECT id, kind, lat, lon, level, sender, created_at FROM reports WHERE kind != 'depth' AND created_at > ? ORDER BY created_at DESC, id DESC",
-    ),
+    spotsSince:
+      "SELECT id, kind, lat, lon, level, sender, created_at FROM reports WHERE kind NOT IN ('depth', 'hail') AND created_at > ? ORDER BY created_at DESC, id DESC",
+    hailSince:
+      "SELECT lat, lon, level, sender, created_at FROM reports WHERE kind = 'hail' AND created_at > ? ORDER BY created_at",
     // One submission may answer several questions; it counts once.
-    countBy: db.prepare(
-      'SELECT COUNT(DISTINCT COALESCE(batch, id)) AS n FROM reports WHERE sender = ? AND created_at > ?',
-    ),
+    countBy:
+      'SELECT COUNT(DISTINCT COALESCE(batch, CAST(id AS TEXT))) AS n FROM reports WHERE sender = ? AND created_at > ?',
+    latest: 'SELECT MAX(created_at) AS at FROM reports',
   };
-  // Senders are stored as a salted hash: enough to rate-limit, not to identify.
-  const salt = createHash('sha256')
-    .update(`bkk-watch:${process.pid}:${now()}`)
-    .digest('hex');
+  // Senders are stored as a salted hash: enough to rate-limit, not to
+  // identify. Serverless instances share one secret salt, or a sender would
+  // get a new hash (and a fresh limit) on every instance.
+  const salt =
+    secret ||
+    createHash('sha256')
+      .update(`bkk-watch:${process.pid}:${now()}`)
+      .digest('hex');
   const senderOf = (ip) =>
     createHash('sha256').update(`${salt}:${ip}`).digest('hex').slice(0, 16);
 
   /** Street-depth reports still on the map. */
-  function list() {
+  async function list() {
     const t = now();
-    return q.depthSince.all(t - ACTIVE_MS).map((r) => ({
+    return (await db.all(SQL.depthSince, t - ACTIVE_MS)).map((r) => ({
       id: r.id,
       lat: r.lat,
       lon: r.lon,
@@ -135,16 +126,22 @@ export function createReports({ db, now = () => Date.now() }) {
   }
 
   /** Trash and food spots still on the map. */
-  function spots() {
-    return groupSpots(q.spotsSince.all(now() - ACTIVE_MS));
+  async function spots() {
+    return groupSpots(await db.all(SQL.spotsSince, now() - ACTIVE_MS));
   }
 
+  /** Hail reports since `t`, oldest first, for hail.js. */
+  const hailRows = (t) => db.all(SQL.hailSince, t);
+
+  /** When the newest report was filed (what browsers poll for). */
+  const latestAt = async () => (await db.get(SQL.latest))?.at ?? null;
+
   /**
-   * `{ lat, lon, answers: { depth?, trash?, food? } }`, or the older
+   * `{ lat, lon, answers: { depth?, trash?, food?, hail? } }`, or the older
    * `{ lat, lon, level }` for a depth report alone.
    * @returns {{ ok: true, reports: object[] } | { ok: false, status: number, error: string }}
    */
-  function add({ lat, lon, level, answers }, ip) {
+  async function add({ lat, lon, level, answers }, ip) {
     lat = Number(lat);
     lon = Number(lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || !inThailand(lat, lon))
@@ -159,33 +156,49 @@ export function createReports({ db, now = () => Date.now() }) {
       return { ok: false, status: 400, error: 'ตัวเลือกไม่ถูกต้อง' };
     const sender = senderOf(String(ip || 'unknown'));
     const t = now();
-    if (q.countBy.get(sender, t - WINDOW_MS).n >= MAX_PER_WINDOW)
+    if ((await db.get(SQL.countBy, sender, t - WINDOW_MS)).n >= MAX_PER_WINDOW)
       return {
         ok: false,
         status: 429,
         error: 'รายงานถี่เกินไป ลองใหม่ในอีกสักครู่',
       };
-    if (q.countBy.get(sender, t - 86400_000).n >= MAX_PER_DAY)
+    if ((await db.get(SQL.countBy, sender, t - 86400_000)).n >= MAX_PER_DAY)
       return { ok: false, status: 429, error: 'รายงานครบจำนวนของวันนี้แล้ว' };
     const batch = randomUUID();
-    return {
-      ok: true,
-      reports: given.map(([kind, choice]) => {
-        const info = q.add.run(lat, lon, kind, choice, sender, batch, t);
-        const picked = CHOICE[kind].get(choice);
-        return {
-          id: Number(info.lastInsertRowid),
-          kind,
-          lat,
-          lon,
-          level: choice,
-          ...(kind === 'depth' ? { cm: picked.cm } : {}),
-          label: picked.label,
-          createdAt: t,
-        };
-      }),
-    };
+    const reports = [];
+    for (const [kind, choice] of given) {
+      const { id } = await db.get(
+        SQL.add,
+        lat,
+        lon,
+        kind,
+        choice,
+        sender,
+        batch,
+        t,
+      );
+      const picked = CHOICE[kind].get(choice);
+      reports.push({
+        id: Number(id),
+        kind,
+        lat,
+        lon,
+        level: choice,
+        ...(kind === 'depth' ? { cm: picked.cm } : {}),
+        label: picked.label,
+        createdAt: t,
+      });
+    }
+    return { ok: true, reports };
   }
 
-  return { list, spots, add, levels: DEPTH_LEVELS, choices: REPORT_CHOICES };
+  return {
+    list,
+    spots,
+    hailRows,
+    latestAt,
+    add,
+    levels: DEPTH_LEVELS,
+    choices: REPORT_CHOICES,
+  };
 }

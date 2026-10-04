@@ -14,6 +14,7 @@ import {
 } from './match.js';
 import { distanceM } from '../engine.js';
 import { extractDepth } from './depth.js';
+import { loadSnapshot, saveSnapshot } from '../store.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const ALERT_TOPICS = new Set(['flood', 'outage', 'fire']);
@@ -28,17 +29,11 @@ export function createNewsEngine({
   gazetteerPath = here('../gazetteer/bangkok.json'),
   fetchVideos = fetchChannelVideos,
 }) {
-  db.exec(`CREATE TABLE IF NOT EXISTS news (
-    video_id   TEXT PRIMARY KEY,
-    json       TEXT NOT NULL,
-    first_seen INTEGER NOT NULL
-  )`);
-  const q = {
-    get: db.prepare('SELECT json, first_seen FROM news WHERE video_id = ?'),
-    put: db.prepare(
-      'INSERT OR REPLACE INTO news (video_id, json, first_seen) VALUES (?, ?, ?)',
-    ),
-    recent: db.prepare('SELECT json FROM news WHERE first_seen > ?'),
+  // The table is created by store.js.
+  const SQL = {
+    get: 'SELECT json, first_seen FROM news WHERE video_id = ?',
+    put: 'INSERT INTO news (video_id, json, first_seen) VALUES (?, ?, ?) ON CONFLICT (video_id) DO UPDATE SET json = excluded.json',
+    recent: 'SELECT json FROM news WHERE first_seen > ?',
   };
   const index = loadIndex(gazetteerPath);
   const channels = JSON.parse(readFileSync(channelsPath, 'utf8'));
@@ -84,17 +79,17 @@ export function createNewsEngine({
   }
 
   /** Subscribers whose circle overlaps the place's own spread. */
-  function recipients(item) {
+  async function recipients(item) {
     const ids = [];
     if (item.lat != null)
-      for (const s of core.subscribers())
+      for (const s of await core.subscribers())
         if (
           distanceM(s.lat, s.lon, item.lat, item.lon) <=
           s.radius_m + (item.extentM || 0)
         )
           ids.push(s.chat_id);
     const title = normalize(item.title);
-    for (const k of core.keywordWatches())
+    for (const k of await core.keywordWatches())
       if (title.includes(normalize(k.keyword))) ids.push(k.chat_id);
     return ids;
   }
@@ -108,7 +103,7 @@ export function createNewsEngine({
         state.channels[channel.name] = { via, count: items.length, at: now };
         const texts = headlineTexts(items);
         for (const video of items) {
-          const known = q.get.get(video.videoId);
+          const known = await db.get(SQL.get, video.videoId);
           const firstSeen = known?.first_seen ?? now;
           const item = toItem(
             video,
@@ -116,7 +111,7 @@ export function createNewsEngine({
             texts.get(video.videoId),
             firstSeen,
           );
-          q.put.run(item.id, JSON.stringify(item), firstSeen);
+          await db.run(SQL.put, item.id, JSON.stringify(item), firstSeen);
           const fresh = now - (item.publishedAt || firstSeen) < ALERT_FRESH_MS;
           if (
             fresh &&
@@ -125,7 +120,7 @@ export function createNewsEngine({
           )
             await core.deliver(
               `news:${item.id}`,
-              recipients(item),
+              await recipients(item),
               alertText(item),
             );
         }
@@ -134,16 +129,34 @@ export function createNewsEngine({
       }
       await new Promise((r) => setTimeout(r, 1500)); // be gentle with YouTube
     }
-    const items = q.recent
-      .all(now - KEEP_MS)
-      .map((r) => JSON.parse(r.json))
-      .filter((i) => i.zone && now - (i.publishedAt || i.firstSeen) < KEEP_MS)
-      .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0));
-    state.items = items;
+    state.items = await recentItems(now);
     state.updatedAt = now;
     state.error = errors.length ? errors.join('; ') : null;
+    const { items: _, ...meta } = state;
+    await saveSnapshot(db, 'news', meta, now);
     core.events.emit('update', 'news');
   }
 
-  return { state, pollNews };
+  /** Placed clips from the last 48 hours, newest first. */
+  async function recentItems(now = Date.now()) {
+    return (await db.all(SQL.recent, now - KEEP_MS))
+      .map((r) => JSON.parse(r.json))
+      .filter((i) => i.zone && now - (i.publishedAt || i.firstSeen) < KEEP_MS)
+      .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0));
+  }
+
+  /**
+   * What /api/bkk/news serves. Read from the database every time: on Vercel
+   * this instance's memory may be older than another instance's poll.
+   */
+  async function current() {
+    const meta = (await loadSnapshot(db, 'news')) || {
+      updatedAt: null,
+      error: null,
+      channels: {},
+    };
+    return { ...meta, items: await recentItems() };
+  }
+
+  return { state, pollNews, current, recentItems };
 }

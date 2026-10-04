@@ -1,6 +1,8 @@
 // The dock under the map: the headline counts, what the circles mean, and a
-// 72-hour replay of how many gauges were over the bank. Scrubbing or playing
-// calls `onIndex(i)`; `onIndex(null)` means "back to now".
+// 72-hour replay. With no gauge open it replays how many gauges were over the
+// bank; with a gauge open (setGauge) it replays that gauge's own level. The
+// two share one axis of hours. Scrubbing or playing calls `onIndex(i)`;
+// `onIndex(null)` means "back to now".
 import { el } from './dom.js';
 import { dayMarks } from './floodMath.js';
 
@@ -23,7 +25,8 @@ const hourLabel = (t) =>
   });
 
 export function createDock({ onIndex, onFlow }) {
-  let timeline = null;
+  let timeline = null; // the country: { hours, over, near, series, gap }
+  let gauge = null; // one gauge: { id, name, hours, percent, now, loading }
   let index = null; // null = live
   let timer = null;
   let live = { over: 0, near: 0, up: 0 };
@@ -43,6 +46,7 @@ export function createDock({ onIndex, onFlow }) {
   const rain = el('div', { class: 'c rain', hidden: true }, rainB, rainText);
 
   const bars = el('div', { class: 'bars' });
+  const bankLine = el('i', { class: 'bank', hidden: true });
   const labels = el('div', { class: 'lbls' });
   const readout = el('span', { class: 'th-readout' });
   const ticks = el(
@@ -54,6 +58,7 @@ export function createDock({ onIndex, onFlow }) {
       'aria-label': 'เลือกเวลาย้อนหลัง',
     },
     bars,
+    bankLine,
     labels,
   );
   const playBtn = el('button', {
@@ -126,19 +131,34 @@ export function createDock({ onIndex, onFlow }) {
     ),
   );
 
-  const count = () => timeline?.hours.length || 0;
+  const axis = () => (gauge ? gauge.hours : timeline?.hours) || [];
+  const count = () => axis().length;
   const usable = () =>
-    timeline &&
-    timeline.over.filter((n, i) => n + timeline.near[i] > 0).length >=
-      MIN_HOURS;
+    gauge
+      ? (gauge.percent || []).filter((p) => p != null).length >= MIN_HOURS
+      : timeline &&
+        timeline.over.filter((n, i) => n + timeline.near[i] > 0).length >=
+          MIN_HOURS;
+  const pct = (p) => `${Math.round(p)}% ของตลิ่ง`;
 
   function drawReadout() {
-    const scrubbing = index != null && timeline;
+    const scrubbing = index != null && usable();
+    const value = gauge
+      ? scrubbing
+        ? gauge.percent[index] == null
+          ? 'ไม่มีข้อมูลชั่วโมงนี้'
+          : pct(gauge.percent[index])
+        : gauge.now == null
+          ? ''
+          : pct(gauge.now)
+      : scrubbing && timeline.gap?.[index]
+        ? 'ไม่มีข้อมูลชั่วโมงนี้'
+        : `ล้นตลิ่ง ${scrubbing ? timeline.over[index] : live.over} จุด`;
     readout.replaceChildren(
       el('b', {
-        text: scrubbing ? `${hourLabel(timeline.hours[index])} น.` : 'ตอนนี้',
+        text: scrubbing ? `${hourLabel(axis()[index])} น.` : 'ตอนนี้',
       }),
-      `ล้นตลิ่ง ${scrubbing ? timeline.over[index] : live.over} จุด`,
+      value,
     );
     readout.classList.toggle('past', Boolean(scrubbing));
     nowBtn.hidden = !scrubbing;
@@ -147,36 +167,74 @@ export function createDock({ onIndex, onFlow }) {
     ticks.setAttribute('aria-valuenow', String(at));
     ticks.setAttribute(
       'aria-valuetext',
-      scrubbing ? hourLabel(timeline.hours[index]) : 'ตอนนี้',
+      scrubbing ? hourLabel(axis()[index]) : 'ตอนนี้',
     );
   }
 
   function draw() {
     root.classList.toggle('empty', !usable());
+    root.classList.toggle('gauge', Boolean(gauge));
     playBtn.disabled = !usable();
+    playBtn.setAttribute(
+      'aria-label',
+      gauge
+        ? `เล่นย้อนหลัง 72 ชั่วโมงของ${gauge.name}`
+        : 'เล่นย้อนหลัง 72 ชั่วโมง',
+    );
+    bankLine.hidden = true;
     if (!usable()) {
       bars.replaceChildren();
       labels.replaceChildren();
-      title.textContent = 'กำลังเก็บข้อมูลย้อนหลัง…';
+      title.textContent = gauge
+        ? gauge.loading
+          ? `กำลังโหลดระดับน้ำย้อนหลังของ${gauge.name}…`
+          : `ยังไม่มีข้อมูลย้อนหลังของ${gauge.name}`
+        : 'กำลังเก็บข้อมูลย้อนหลัง…';
       drawReadout();
       return;
     }
-    title.textContent = 'จำนวนจุดล้นตลิ่ง';
     const n = count();
-    const max = Math.max(1, ...timeline.over);
-    const peak = timeline.over.indexOf(max);
-    // Bars start at zero: a flat row means the count really did not move much.
-    bars.replaceChildren(
-      ...timeline.over.map((v, i) =>
-        el('u', {
-          class: i === peak ? 'pk' : '',
-          style: `height:${Math.max(4, (v / max) * 100)}%`,
-        }),
-      ),
-    );
     const at = (i) => `left:${((i / (n - 1)) * 100).toFixed(2)}%`;
+    let peak;
+    let peakText;
+    if (gauge) {
+      // One gauge: its level against the bank, which is the dashed line.
+      title.textContent = `${gauge.name} · % ของตลิ่ง`;
+      const values = gauge.percent.filter((p) => p != null);
+      const top = Math.max(120, ...values) * 1.05;
+      peak = gauge.percent.indexOf(Math.max(...values));
+      peakText = `สูงสุด ${Math.round(gauge.percent[peak])}%`;
+      bankLine.hidden = false;
+      bankLine.style.setProperty('--bank', `${(100 / top) * 100}%`);
+      bars.replaceChildren(
+        ...gauge.percent.map((p, i) =>
+          el('u', {
+            class: [
+              p == null ? 'gap' : p > 100 ? 'ov' : p > 70 ? 'nr' : 'lo',
+              i === peak ? 'pk' : '',
+            ].join(' '),
+            style: `height:${p == null ? 100 : Math.max(4, (p / top) * 100)}%`,
+          }),
+        ),
+      );
+    } else {
+      title.textContent = 'จำนวนจุดล้นตลิ่ง';
+      const max = Math.max(1, ...timeline.over);
+      peak = timeline.over.indexOf(max);
+      peakText = `สูงสุด ${max}`;
+      // Bars start at zero: a flat row means the count really did not move
+      // much. An hour the service did not record is a gap, not a zero.
+      bars.replaceChildren(
+        ...timeline.over.map((v, i) =>
+          el('u', {
+            class: timeline.gap?.[i] ? 'gap' : i === peak ? 'pk' : '',
+            style: `height:${timeline.gap?.[i] ? 100 : Math.max(4, (v / max) * 100)}%`,
+          }),
+        ),
+      );
+    }
     labels.replaceChildren(
-      ...dayMarks(timeline.hours)
+      ...dayMarks(axis())
         .filter((m) => m.index > 2 && m.index < n - 6)
         .map((m) =>
           el('span', { class: 'day', style: at(m.index), text: dayLabel(m.t) }),
@@ -187,7 +245,7 @@ export function createDock({ onIndex, onFlow }) {
             el('span', {
               class: 'pk',
               style: at(peak),
-              text: `สูงสุด ${max}`,
+              text: peakText,
             }),
           ]
         : []),
@@ -253,6 +311,18 @@ export function createDock({ onIndex, onFlow }) {
       if (index != null && index >= count() - 1) index = null;
       draw();
     },
+    /**
+     * Replay one gauge instead of the country, or null to go back. A new
+     * gauge (or none) starts from "now"; more data for the same one keeps
+     * the hour being looked at.
+     */
+    setGauge(next) {
+      const same = next && gauge && next.id === gauge.id;
+      gauge = next || null;
+      if (!same && index != null) go(null);
+      else if (index != null && index >= count() - 1) index = null;
+      draw();
+    },
     setLive(next) {
       live = next;
       cOver.b.textContent = String(next.over);
@@ -280,6 +350,9 @@ export function createDock({ onIndex, onFlow }) {
     },
     get timeline() {
       return timeline;
+    },
+    get gauge() {
+      return gauge;
     },
   };
 }

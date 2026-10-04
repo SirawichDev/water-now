@@ -147,27 +147,26 @@ export function createNearby({ userAgent, db = null, fetchImpl = fetch }) {
     map.set(key, { at: Date.now(), data });
     return data;
   };
-  // Places are kept on disk: shops and hospitals rarely move, and the public
-  // Overpass servers are too unreliable to ask on every click.
-  db?.exec(`CREATE TABLE IF NOT EXISTS places_cache (
-    key        TEXT PRIMARY KEY,
-    json       TEXT NOT NULL,
-    fetched_at INTEGER NOT NULL
-  )`);
-  const getCached = db?.prepare(
-    'SELECT json, fetched_at FROM places_cache WHERE key = ?',
-  );
-  const putCached = db?.prepare(
-    'INSERT OR REPLACE INTO places_cache (key, json, fetched_at) VALUES (?, ?, ?)',
-  );
+  // Places are kept in the database (table from store.js): shops and
+  // hospitals rarely move, and the public Overpass servers are too unreliable
+  // to ask on every click.
+  const getCached = (key) =>
+    db?.get('SELECT json, fetched_at FROM places_cache WHERE key = ?', key);
+  const putCached = (key, json, at) =>
+    db?.run(
+      'INSERT INTO places_cache (key, json, fetched_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at',
+      key,
+      json,
+      at,
+    );
   const placeKey = (lat, lon) => `${lat.toFixed(2)},${lon.toFixed(2)}`;
   const foodKey = (lat, lon) => `food:${placeKey(lat, lon)}`;
   // A river line belongs to one gauge, so it is keyed more finely.
   // "river2": earlier answers could include a neighbouring canal.
   const riverKey = (lat, lon) => `river2:${lat.toFixed(3)},${lon.toFixed(3)}`;
 
-  function cached(key) {
-    const row = getCached?.get(key);
+  async function cached(key) {
+    const row = await getCached(key);
     if (!row || Date.now() - row.fetched_at > PLACES_TTL_MS) return null;
     return JSON.parse(row.json);
   }
@@ -197,7 +196,7 @@ export function createNearby({ userAgent, db = null, fetchImpl = fetch }) {
   }
 
   async function lookup(key, radiusM, query, group, field = 'places') {
-    const hit = cached(key);
+    const hit = await cached(key);
     if (hit) return hit;
     const data = {
       radiusM,
@@ -205,7 +204,7 @@ export function createNearby({ userAgent, db = null, fetchImpl = fetch }) {
       fetchedAt: Date.now(),
       [field]: group(await overpass(query)),
     };
-    putCached?.run(key, JSON.stringify(data), data.fetchedAt);
+    await putCached(key, JSON.stringify(data), data.fetchedAt);
     return data;
   }
 
@@ -236,7 +235,7 @@ export function createNearby({ userAgent, db = null, fetchImpl = fetch }) {
    */
   function getRiver(lat, lon, { cachedOnly = false } = {}) {
     if (cachedOnly)
-      return Promise.resolve(cached(riverKey(lat, lon)) || { rivers: null });
+      return cached(riverKey(lat, lon)).then((hit) => hit || { rivers: null });
     return lookup(
       riverKey(lat, lon),
       RIVER_SEARCH_M,
@@ -263,7 +262,7 @@ export function createNearby({ userAgent, db = null, fetchImpl = fetch }) {
           [placeKey(lat, lon), getPlaces],
           [foodKey(lat, lon), getFood],
         ]) {
-          if (cached(key)) continue;
+          if (await cached(key)) continue;
           try {
             await get(lat, lon);
           } catch {

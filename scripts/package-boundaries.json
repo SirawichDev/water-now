@@ -162,6 +162,7 @@
       "server/providers/cctv/range.js",
       "server/providers/cctv/sources.js",
       "server/providers/cctv/stream.js",
+      "server/providers/cctv/stateless.js",
       "server/providers/common/http.js",
       "src/data/directionText.js",
       "server/providers/common/geo.js",
@@ -1994,7 +1995,11 @@
       "src/bkk/folk.js",
       "src/bkk/folkUi.js",
       "src/bkk/reportSheet.js",
-      "src/bkk/flowOverlay.js"
+      "src/bkk/flowOverlay.js",
+      "src/bkk/northWater.js",
+      "src/bkk/northOverlay.js",
+      "src/bkk/hail.js",
+      "src/bkk/hailOverlay.js"
     ],
     "external": [
       "hls.js",

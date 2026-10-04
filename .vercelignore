@@ -1,0 +1,19 @@
+# Never upload credentials or local state to Vercel.
+.env
+.env.*
+!.env.example
+alert-service/.env
+alert-service/data/
+.run/
+.gev-cache/
+.gev-logs/
+node_modules
+dist
+screenshots/
+qa-shots/
+output/
+3d-models/
+pinokio/
+docs/
+*.log
+.DS_Store

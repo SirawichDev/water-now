@@ -31,6 +31,9 @@ function trendChange(now, previous) {
   return Math.abs(d) < TREND_EPSILON_M ? 0 : d;
 }
 
+const finiteOrNull = (v) =>
+  v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
+
 export function normalizeWaterRows(payload, { now = Date.now(), staleMs }) {
   // The nationwide endpoint nests rows; the per-province one does not.
   const rows =
@@ -65,6 +68,12 @@ export function normalizeWaterRows(payload, { now = Date.now(), staleMs }) {
         level,
         levelText: LEVEL_TEXT[level] || 'ไม่ทราบ',
         agency: r.agency?.agency_shortname?.th || '',
+        // RID station code ("C.2"), basin, and flow against the channel's
+        // capacity: what shows water travelling down a river.
+        code: st.tele_station_oldcode || '',
+        basin: r.basin?.basin_name?.th || '',
+        flow: finiteOrNull(r.discharge),
+        capacity: finiteOrNull(st.qmax),
       };
     })
     .filter(Boolean);

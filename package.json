@@ -55,11 +55,13 @@
     "@jtarrio/webrtlsdr": "^3.0.6",
     "@mapbox/vector-tile": "^3.0.0",
     "@meri-imperiumi/eccodes-wasm": "^2.48.2",
+    "@vercel/functions": "^3.9.11",
     "cesium": "^1.124.0",
     "egm96-universal": "^1.1.1",
     "hls.js": "^1.7.3",
     "mgrs": "^2.1.0",
     "pbf": "^5.1.2",
+    "pg": "^8.23.1",
     "satellite.js": "^6.0.2"
   },
   "devDependencies": {

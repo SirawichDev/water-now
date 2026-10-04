@@ -18,6 +18,7 @@ import {
 } from './cctv/constants.js';
 import { sanitizeCctvRangeHeader } from './cctv/range.js';
 import { createHlsPuller, HLS_LIMITS } from './cctv/stream.js';
+import { statelessHlsEnabled, serveStatelessHls } from './cctv/stateless.js';
 import { googleServerApiKey } from './places/google-key.js';
 export { CCTV_FRAME_FETCH_TIMEOUT_MS, fetchCctvImageFromUpstream };
 /**
@@ -46,6 +47,9 @@ export function cctvProxy({ sourceRoot = process.cwd() } = {}) {
   // (24 MiB each). The Bangkok camera wall plays every camera at once, so the
   // cap is an env knob here; each session still self-limits its buffer.
   const maxSessions = Number(process.env.CCTV_HLS_MAX_SESSIONS);
+  // bkk-watch: on serverless hosts every request may land on a different
+  // instance, so live HLS is relayed statelessly instead of pulled.
+  const statelessHls = statelessHlsEnabled();
   const puller = createHlsPuller({
     limits: {
       ...HLS_LIMITS,
@@ -182,7 +186,10 @@ export function cctvProxy({ sourceRoot = process.cwd() } = {}) {
           };
           res.writeHead(200, {
             'Content-Type': 'application/json',
-            'Cache-Control': 'no-store',
+            // The catalog probes every stream; let the CDN keep it.
+            'Cache-Control': statelessHls
+              ? 'public, s-maxage=900, stale-while-revalidate=3600'
+              : 'no-store',
           });
           res.end(JSON.stringify(body));
           return;
@@ -209,6 +216,26 @@ export function cctvProxy({ sourceRoot = process.cwd() } = {}) {
           });
           res.end(JSON.stringify(payload));
           return;
+        }
+
+        if (statelessHls && url.pathname.startsWith('/media/')) {
+          const relay = /^\/media\/([^/]+?)(\/u)?$/.exec(url.pathname);
+          const cameraId = relay ? decodeURIComponent(relay[1]) : '';
+          const source = sourceById.get(cameraId);
+          if (
+            relay &&
+            normalizeFeedType(source?.feedType || 'image') === 'hls'
+          ) {
+            await serveStatelessHls({
+              req,
+              res,
+              url,
+              cameraId,
+              source,
+              relayed: Boolean(relay[2]),
+            });
+            return;
+          }
         }
 
         if (url.pathname.startsWith('/media/')) {

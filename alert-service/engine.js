@@ -3,6 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { fetchThailandWater, LEVEL_TEXT } from './sources/thaiwater.js';
 import { fetchPlannedOutages } from './sources/mea.js';
+import { loadSnapshot, saveSnapshot } from './store.js';
 
 const ALERT_LEVEL = 4;
 const BKK_PROVINCE = 'กรุงเทพมหานคร';
@@ -36,43 +37,52 @@ const placeSuffix = (st) => {
   return ` (${st.district ? `อ.${st.district} ` : ''}จ.${st.province})`;
 };
 
+const SQL = {
+  subs: 'SELECT * FROM subscribers WHERE active = 1 AND lat IS NOT NULL',
+  keywords:
+    'SELECT k.chat_id, k.keyword FROM keywords k JOIN subscribers s ON s.chat_id = k.chat_id WHERE s.active = 1',
+  wasSent: 'SELECT 1 AS hit FROM sent WHERE key = ? AND chat_id = ?',
+  markSent:
+    'INSERT INTO sent (key, chat_id, sent_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+  getWater: 'SELECT level FROM water_state WHERE station_id = ?',
+  putWater:
+    'INSERT INTO water_state (station_id, level, observed_at) VALUES (?, ?, ?) ON CONFLICT (station_id) DO UPDATE SET level = excluded.level, observed_at = excluded.observed_at',
+  getOutage: 'SELECT json FROM outages WHERE id = ?',
+  putOutage:
+    'INSERT INTO outages (id, json, first_seen) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET json = excluded.json',
+};
+const EMPTY = {
+  water: { updatedAt: null, error: null, stations: [] },
+  outages: { updatedAt: null, error: null, outages: [] },
+};
+
+/**
+ * @param {object} opts
+ * @param {object} opts.db  a store from store.js
+ */
 export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
   const fetchWater = sources.water || fetchThailandWater;
   const fetchOutages = sources.outages || fetchPlannedOutages;
   const events = new EventEmitter();
-  const state = {
-    water: { updatedAt: null, error: null, stations: [] },
-    outages: { updatedAt: null, error: null, outages: [] },
-  };
+  // What this process last polled. Another process (a serverless instance)
+  // reads the saved snapshot instead: see snapshot().
+  const state = structuredClone(EMPTY);
 
-  const q = {
-    subs: db.prepare(
-      'SELECT * FROM subscribers WHERE active = 1 AND lat IS NOT NULL',
-    ),
-    keywords: db.prepare(
-      'SELECT k.chat_id, k.keyword FROM keywords k JOIN subscribers s ON s.chat_id = k.chat_id WHERE s.active = 1',
-    ),
-    wasSent: db.prepare('SELECT 1 FROM sent WHERE key = ? AND chat_id = ?'),
-    markSent: db.prepare(
-      'INSERT OR IGNORE INTO sent (key, chat_id, sent_at) VALUES (?, ?, ?)',
-    ),
-    getWater: db.prepare('SELECT level FROM water_state WHERE station_id = ?'),
-    putWater: db.prepare(
-      'INSERT OR REPLACE INTO water_state (station_id, level, observed_at) VALUES (?, ?, ?)',
-    ),
-    getOutage: db.prepare('SELECT json FROM outages WHERE id = ?'),
-    putOutage: db.prepare(
-      'INSERT OR REPLACE INTO outages (id, json, first_seen) VALUES (?, ?, ?)',
-    ),
-  };
+  /**
+   * The latest water or outage result. Read from the database: on Vercel
+   * another instance may have polled since this one did.
+   */
+  async function snapshot(kind) {
+    return (await loadSnapshot(db, kind)) || state[kind];
+  }
 
   async function deliver(key, chatIds, text) {
     let count = 0;
     for (const chatId of new Set(chatIds)) {
-      if (q.wasSent.get(key, chatId)) continue;
+      if (await db.get(SQL.wasSent, key, chatId)) continue;
       try {
         await notifier.send(chatId, text);
-        q.markSent.run(key, chatId, Date.now());
+        await db.run(SQL.markSent, key, chatId, Date.now());
         count++;
       } catch (e) {
         console.warn(`[alert] send to ${chatId} failed: ${e.message}`);
@@ -81,8 +91,10 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
     if (count) console.log(`[alert] ${key} → ${count} chat(s)`);
   }
 
-  const nearby = (lat, lon) =>
-    q.subs.all().filter((s) => distanceM(s.lat, s.lon, lat, lon) <= s.radius_m);
+  const subscribers = () => db.all(SQL.subs);
+  const keywordWatches = () => db.all(SQL.keywords);
+  const nearby = (subs, lat, lon) =>
+    subs.filter((s) => distanceM(s.lat, s.lon, lat, lon) <= s.radius_m);
 
   function waterText(st, kind) {
     const head =
@@ -107,12 +119,20 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
         staleMs: config.waterStaleMs,
         userAgent: config.userAgent,
       });
+      const subs = await subscribers();
+      const prevLevels = new Map(
+        (await db.all('SELECT station_id, level FROM water_state')).map((r) => [
+          r.station_id,
+          r.level,
+        ]),
+      );
+      const changed = [];
       for (const st of stations) {
         if (st.stale || !st.level) continue;
-        const prev = q.getWater.get(st.id)?.level ?? null;
-        q.putWater.run(st.id, st.level, st.observedAt);
+        const prev = prevLevels.get(String(st.id)) ?? null;
+        if (prev !== st.level) changed.push(st);
         if (prev == null || prev === st.level) continue;
-        const recipients = nearby(st.lat, st.lon).map((s) => s.chat_id);
+        const recipients = nearby(subs, st.lat, st.lon).map((s) => s.chat_id);
         if (st.level >= ALERT_LEVEL && st.level > prev)
           await deliver(
             `water:${st.id}:L${st.level}:${st.observedAt}`,
@@ -126,11 +146,17 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
             waterText(st, 'resolved'),
           );
       }
+      // Only levels that moved are written: about 800 rows otherwise.
+      await db.tx(async (tx) => {
+        for (const st of changed)
+          await tx.run(SQL.putWater, String(st.id), st.level, st.observedAt);
+      });
       state.water = { updatedAt: Date.now(), error: null, stations };
     } catch (e) {
       console.warn(`[water] ${e.message}`);
-      state.water = { ...state.water, error: e.message };
+      state.water = { ...(await snapshot('water')), error: e.message };
     }
+    await saveSnapshot(db, 'water', state.water);
     events.emit('update', 'water');
   }
 
@@ -150,12 +176,12 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
   }
 
   /** Location matches need a soi-level geocode; keyword matches read the text. */
-  function outageRecipients(o) {
+  function outageRecipients(o, subs, keywords) {
     const ids = [];
     if (o.lat != null && o.precision === 'soi')
-      ids.push(...nearby(o.lat, o.lon).map((s) => s.chat_id));
+      ids.push(...nearby(subs, o.lat, o.lon).map((s) => s.chat_id));
     const area = squash(o.area);
-    for (const k of q.keywords.all())
+    for (const k of keywords)
       if (area.includes(squash(k.keyword))) ids.push(k.chat_id);
     return ids;
   }
@@ -167,8 +193,10 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
         (r) => r.province === BKK_PROVINCE && r.endsAt > now,
       );
       const outages = [];
+      const subs = await subscribers();
+      const keywords = await keywordWatches();
       for (const r of rows) {
-        const known = q.getOutage.get(r.id);
+        const known = await db.get(SQL.getOutage, r.id);
         let o;
         if (known) o = JSON.parse(known.json);
         else {
@@ -185,10 +213,10 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
             precision: loc?.precision ?? 'none',
             matched: loc?.matched ?? null,
           };
-          q.putOutage.run(o.id, JSON.stringify(o), now);
+          await db.run(SQL.putOutage, o.id, JSON.stringify(o), now);
         }
         outages.push(o);
-        const recipients = outageRecipients(o);
+        const recipients = outageRecipients(o, subs, keywords);
         await deliver(`outage:${o.id}:new`, recipients, outageText(o, 'new'));
         if (o.startsAt > now && o.startsAt - now <= config.outageReminderMs)
           await deliver(
@@ -201,19 +229,24 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
       state.outages = { updatedAt: now, error: null, outages };
     } catch (e) {
       console.warn(`[outages] ${e.message}`);
-      state.outages = { ...state.outages, error: e.message };
+      state.outages = { ...(await snapshot('outages')), error: e.message };
     }
+    await saveSnapshot(db, 'outages', state.outages);
     events.emit('update', 'outages');
   }
 
   /** Everything currently relevant to one subscriber, for /status and on subscribe. */
-  function statusFor(sub, keywords = []) {
+  async function statusFor(sub, keywords = []) {
+    const water = await snapshot('water');
+    const outages = await snapshot('outages');
+    const subs = await subscribers();
+    const watches = await keywordWatches();
     const lines = [];
     if (sub.lat == null)
       lines.push(
         '📍 ยังไม่ได้ส่งตำแหน่ง — ส่งตำแหน่งเพื่อรับแจ้งเตือนระดับน้ำและไฟดับใกล้คุณ',
       );
-    const stations = (sub.lat == null ? [] : state.water.stations)
+    const stations = (sub.lat == null ? [] : water.stations)
       .map((st) => ({ st, d: distanceM(sub.lat, sub.lon, st.lat, st.lon) }))
       .sort((a, b) => a.d - b.d);
     const inRange = stations.filter((x) => x.d <= sub.radius_m);
@@ -229,8 +262,8 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
         `💧 ไม่มีสถานีวัดน้ำในรัศมี ${km(sub.radius_m)} — ใกล้สุดคือ ${st.name} (${km(d)}) ${st.storagePercent.toFixed(0)}% ${st.levelText}`,
       );
     }
-    const mine = state.outages.outages.filter((o) =>
-      outageRecipients(o).includes(sub.chat_id),
+    const mine = outages.outages.filter((o) =>
+      outageRecipients(o, subs, watches).includes(sub.chat_id),
     );
     lines.push(
       mine.length
@@ -247,12 +280,13 @@ export function createEngine({ db, config, geocoder, notifier, sources = {} }) {
   return {
     state,
     events,
+    snapshot,
     pollWater,
     pollOutages,
     statusFor,
     // Shared with the news engine so every alert type dedupes the same way.
     deliver,
-    subscribers: () => q.subs.all(),
-    keywordWatches: () => q.keywords.all(),
+    subscribers,
+    keywordWatches,
   };
 }

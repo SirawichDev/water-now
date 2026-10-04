@@ -1,5 +1,14 @@
 import { applicationHtmlPlugin } from './application-html.js';
 import cesium from 'vite-plugin-cesium';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const APP_PAGES = Object.fromEntries(
+  ['index', 'bkk-cams', 'bkk-news']
+    .map((name) => [name, `${root}${name}.html`])
+    .filter(([, path]) => existsSync(path)),
+);
 
 /** Build browser assets with explicit inputs; never load environment or providers. */
 export function createBrowserViteConfig({
@@ -48,6 +57,11 @@ export function createBrowserViteConfig({
       'import.meta.env.GOOGLE_MAPS_API_KEY': JSON.stringify(googleApiKey),
       'import.meta.env.CESIUM_ION_TOKEN': JSON.stringify(cesiumToken),
     },
-    build: { chunkSizeWarningLimit: 1500 },
+    build: {
+      chunkSizeWarningLimit: 1500,
+      // Every page, not only index.html: the camera wall and the news list
+      // are pages of their own.
+      rollupOptions: { input: APP_PAGES },
+    },
   };
 }

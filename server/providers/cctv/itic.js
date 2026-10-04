@@ -90,9 +90,22 @@ export function iticCameraToSource(row) {
 }
 
 /**
- * Keep cameras whose playlist answers right now. Most provincial DOH relays
- * return 502 upstream for long stretches; listing them only fills the wall
- * with dead tiles. Re-checked on every catalog refresh (15 min).
+ * Whether a playlist can play: a master playlist (variants), or a media
+ * playlist with at least one segment longer than zero. iTIC answers for an
+ * offline camera with a placeholder: one 0-second segment, then ENDLIST.
+ */
+export function isPlayablePlaylist(text) {
+  const t = String(text || '');
+  if (!t.startsWith('#EXTM3U')) return false;
+  if (/#EXT-X-STREAM-INF/.test(t)) return true;
+  return [...t.matchAll(/#EXTINF:\s*([\d.]+)/g)].some((m) => Number(m[1]) > 0);
+}
+
+/**
+ * Keep cameras whose playlist answers with video right now. Most provincial
+ * DOH relays return 502 upstream for long stretches, and offline cameras
+ * answer with an empty placeholder; listing them only fills the wall with
+ * dead tiles. Re-checked on every catalog refresh (15 min).
  */
 async function keepLiveStreams(cameras, fetchImpl, concurrency = 8) {
   if (String(process.env.CCTV_ITIC_KEEP_DEAD || '') === '1') return cameras;
@@ -106,8 +119,7 @@ async function keepLiveStreams(cameras, fetchImpl, concurrency = 8) {
           signal: AbortSignal.timeout(8000),
           redirect: 'error',
         });
-        const head = res.ok ? (await res.text()).slice(0, 7) : '';
-        alive[i] = head === '#EXTM3U';
+        alive[i] = res.ok && isPlayablePlaylist(await res.text());
       } catch {
         alive[i] = false;
       }

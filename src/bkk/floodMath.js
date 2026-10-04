@@ -14,12 +14,17 @@ export function overMetresAt(percent, st) {
 }
 
 /**
- * Circle radius in pixels. Area grows with metres over the bank, and the whole
- * set shrinks as the camera rises so a country view is not one red blob.
+ * Circle radius in pixels from the percent of bank-full depth: area grows
+ * with how far over the bank the water stands (100% is the smallest circle,
+ * 200% — the bank's own depth again above it — is five times as wide), and
+ * the whole set shrinks as the camera rises so a country view is not one red
+ * blob. The same number fills the circle (tankFill), so a higher percent is
+ * both a bigger circle and a fuller one.
  */
-export function bubbleRadius(metres, cameraHeightM) {
+export function bubbleRadius(percent, cameraHeightM) {
   const scale = Math.max(0.3, Math.min(1.2, 500_000 / cameraHeightM));
-  return (5 + 7 * Math.sqrt(Math.max(0, metres || 0))) * scale;
+  const over = Math.max(0, (percent || 0) - 100) / 100;
+  return (5 + 20 * Math.sqrt(over)) * scale;
 }
 
 /** Below this radius a circle is too small to show a water level inside. */
@@ -31,8 +36,8 @@ export const TANK_MIN_RADIUS = 9;
 export const TANK_ZOOM_M = 120_000;
 
 /** An over-bank gauge's circle: never smaller than a tank once zoomed in. */
-export function circleRadius(metres, cameraHeightM) {
-  const r = bubbleRadius(metres, cameraHeightM);
+export function circleRadius(percent, cameraHeightM) {
+  const r = bubbleRadius(percent, cameraHeightM);
   return cameraHeightM < TANK_ZOOM_M ? Math.max(r, TANK_MIN_RADIUS + 1) : r;
 }
 const TANK_BANK_AT = 50; // % of the circle's height where the bank line sits
@@ -78,6 +83,30 @@ export function frameAt(timeline, index, stationsById) {
     });
   }
   return out;
+}
+
+/**
+ * One gauge's last `hours` hours as percent of bank-full depth, one value per
+ * hour (the hour's last reading, null when it had none), from the 10-minute
+ * levels /api/bkk/water/history serves. The axis ends at the current hour.
+ * @returns {{ hours: number[], percent: (number|null)[] } | null}
+ */
+export function gaugeSeries(points, st, { hours = 72, now = Date.now() } = {}) {
+  const full = st.bankMsl - st.groundMsl;
+  if (!points?.length || !Number.isFinite(full) || full <= 0) return null;
+  const HOUR = 3600_000;
+  const end = Math.floor(now / HOUR) * HOUR;
+  const start = end - hours * HOUR;
+  const percent = new Array(hours + 1).fill(null);
+  for (const p of points) {
+    const i = Math.floor((p.t - start) / HOUR);
+    if (i < 0 || i > hours || !Number.isFinite(p.v)) continue;
+    percent[i] = Math.round(((p.v - st.groundMsl) / full) * 1000) / 10;
+  }
+  return {
+    hours: Array.from({ length: hours + 1 }, (_, i) => start + i * HOUR),
+    percent,
+  };
 }
 
 /** Bangkok-midnight positions inside an hourly axis: [{ index, t }]. */

@@ -7,6 +7,12 @@
   <meta name="description" content="ดูว่าตอนนี้แม่น้ำและคลองจุดไหนในประเทศไทยล้นตลิ่ง พร้อมข่าวน้ำท่วมและกล้องสดในพื้นที่" />
   <meta name="theme-color" content="#ffffff" />
   <link rel="icon" type="image/svg+xml" href="/bkk-logo.svg" />
+  <!-- bkk-watch: the app draws its own light and dark themes (the สว่าง/มืด
+       switch), so it asks browsers not to force-darken or invert it:
+       Chromium's auto dark mode skips pages that declare both schemes, and
+       Dark Reader skips pages with darkreader-lock. -->
+  <meta name="color-scheme" content="light dark" />
+  <meta name="darkreader-lock" />
   <link rel="stylesheet" href="/style.css" />
   <link rel="stylesheet" href="/src/bkk/thaiShell.css" />
   <!-- bkk-watch: choose simple/advanced mode before first paint, and skip

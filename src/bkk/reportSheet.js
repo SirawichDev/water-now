@@ -1,4 +1,4 @@
-// The report form: up to three questions, each answered by tapping one fixed
+// The report form: up to four questions, each answered by tapping one fixed
 // choice. No typing and no photo, so there is nothing to moderate.
 import { el } from './dom.js';
 
@@ -19,13 +19,19 @@ const GROUPS = [
     title: 'ตรงนี้ยังมีอาหารขายไหม',
     short: { open: 'ยังมีขาย', closed: 'ไม่มีขายแล้ว' },
   },
+  {
+    kind: 'hail',
+    title: 'มีลูกเห็บตกไหม',
+    order: ['seen', 'none'],
+    short: { seen: 'เห็นลูกเห็บตก', none: 'ไม่มี' },
+  },
 ];
 
 /**
  * @param {object} opts
  * @param {{ lat: number, lon: number }} opts.at  where the report is about
  * @param {string} opts.where   one line naming the place
- * @param {object} opts.choices `{ depth, trash, food }` from /api/bkk/reports
+ * @param {object} opts.choices `{ depth, trash, food, hail }` from /api/bkk/reports
  * @param {() => unknown} [opts.onSent]
  * @returns {() => void} closes the sheet
  */

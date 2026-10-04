@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { iticCameraToSource } from './itic.js';
+import { iticCameraToSource, isPlayablePlaylist } from './itic.js';
 
 const row = {
   title: '(กรุงเทพมหานคร) เชิงสะพานตากสิน ฝั่งสาทร',
@@ -45,4 +45,24 @@ test('provinces become their own city; bad hosts and coordinates are dropped', (
   );
   assert.equal(iticCameraToSource({ ...row, latitude: '35.0' }), null);
   assert.equal(iticCameraToSource({ ...row, title: 'no province' }), null);
+});
+
+test('the placeholder an offline camera serves is not playable', () => {
+  // What iTIC served for ITICM_BMAMI0211 on 1 Oct 2026.
+  const placeholder =
+    '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:0\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:0.000000,\ncl2101.ts\n#EXT-X-ENDLIST\n';
+  assert.equal(isPlayablePlaylist(placeholder), false);
+  assert.equal(
+    isPlayablePlaylist(
+      '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nseg0.ts\n',
+    ),
+    true,
+  );
+  assert.equal(
+    isPlayablePlaylist(
+      '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=245183\nchunklist.m3u8\n',
+    ),
+    true,
+  );
+  assert.equal(isPlayablePlaylist('<html>502</html>'), false);
 });

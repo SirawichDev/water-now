@@ -1,5 +1,6 @@
-// Telegram bot over long polling: the machine calls out to Telegram, so it
-// works behind home NAT with no public URL or TLS certificate.
+// Telegram bot. Locally it long-polls: the machine calls out to Telegram, so
+// it works behind home NAT with no public URL. On Vercel Telegram calls the
+// webhook instead (handleUpdate), since nothing runs between requests.
 const API = (token, method) => `https://api.telegram.org/bot${token}/${method}`;
 
 const LOCATION_KEYBOARD = {
@@ -22,7 +23,10 @@ const HELP = [
   'ยังไม่ครอบคลุมไฟดับฉุกเฉินและน้ำท่วมถนนโดยตรง',
 ].join('\n');
 
-export function createTelegram({ token, db, config, engine }) {
+export function createTelegram({ token, db, config, engine = null }) {
+  // The engine sends through this bot and the bot answers /status from the
+  // engine, so app.js attaches it once both exist.
+  let core = engine;
   const call = async (method, body) => {
     const res = await fetch(API(token, method), {
       method: 'POST',
@@ -34,25 +38,28 @@ export function createTelegram({ token, db, config, engine }) {
     return json.result;
   };
 
+  const statement = (sql) => ({
+    get: (...p) => db.get(sql, ...p),
+    all: (...p) => db.all(sql, ...p),
+    run: (...p) => db.run(sql, ...p),
+  });
   const q = {
-    get: db.prepare('SELECT * FROM subscribers WHERE chat_id = ?'),
-    ensure: db.prepare(
-      'INSERT OR IGNORE INTO subscribers (chat_id, radius_m, active, created_at) VALUES (?, ?, 1, ?)',
+    get: statement('SELECT * FROM subscribers WHERE chat_id = ?'),
+    ensure: statement(
+      'INSERT INTO subscribers (chat_id, radius_m, active, created_at) VALUES (?, ?, 1, ?) ON CONFLICT DO NOTHING',
     ),
-    setLoc: db.prepare(
+    setLoc: statement(
       'UPDATE subscribers SET lat = ?, lon = ?, active = 1 WHERE chat_id = ?',
     ),
-    setRadius: db.prepare(
+    setRadius: statement(
       'UPDATE subscribers SET radius_m = ? WHERE chat_id = ?',
     ),
-    setActive: db.prepare(
-      'UPDATE subscribers SET active = ? WHERE chat_id = ?',
+    setActive: statement('UPDATE subscribers SET active = ? WHERE chat_id = ?'),
+    addKw: statement(
+      'INSERT INTO keywords (chat_id, keyword) VALUES (?, ?) ON CONFLICT DO NOTHING',
     ),
-    addKw: db.prepare(
-      'INSERT OR IGNORE INTO keywords (chat_id, keyword) VALUES (?, ?)',
-    ),
-    delKw: db.prepare('DELETE FROM keywords WHERE chat_id = ? AND keyword = ?'),
-    kws: db.prepare('SELECT keyword FROM keywords WHERE chat_id = ?'),
+    delKw: statement('DELETE FROM keywords WHERE chat_id = ? AND keyword = ?'),
+    kws: statement('SELECT keyword FROM keywords WHERE chat_id = ?'),
   };
 
   const send = (chatId, text, extra = {}) =>
@@ -63,21 +70,24 @@ export function createTelegram({ token, db, config, engine }) {
       ...extra,
     });
 
-  function subscriber(chatId) {
-    q.ensure.run(chatId, config.defaultRadiusM, Date.now());
+  async function subscriber(chatId) {
+    await q.ensure.run(chatId, config.defaultRadiusM, Date.now());
     return q.get.get(chatId);
   }
-  const keywords = (chatId) => q.kws.all(chatId).map((r) => r.keyword);
+  const keywords = async (chatId) =>
+    (await q.kws.all(chatId)).map((r) => r.keyword);
+  const status = async (chatId) =>
+    core.statusFor(await q.get.get(chatId), await keywords(chatId));
 
   async function handle(msg) {
     const chatId = String(msg.chat.id);
-    const sub = subscriber(chatId);
+    const sub = await subscriber(chatId);
     if (msg.location) {
-      q.setLoc.run(msg.location.latitude, msg.location.longitude, chatId);
-      const s = q.get.get(chatId);
+      await q.setLoc.run(msg.location.latitude, msg.location.longitude, chatId);
+      const s = await q.get.get(chatId);
       await send(
         chatId,
-        `✅ บันทึกตำแหน่งแล้ว ติดตามรัศมี ${(s.radius_m / 1000).toFixed(1)} กม.\n\n${engine.statusFor(s, keywords(chatId))}`,
+        `✅ บันทึกตำแหน่งแล้ว ติดตามรัศมี ${(s.radius_m / 1000).toFixed(1)} กม.\n\n${await status(chatId)}`,
         {
           reply_markup: { remove_keyboard: true },
         },
@@ -91,34 +101,31 @@ export function createTelegram({ token, db, config, engine }) {
     switch (cmd.replace(/@.*$/, '')) {
       case '/start':
       case '/help':
-        q.setActive.run(1, chatId);
+        await q.setActive.run(1, chatId);
         await send(chatId, HELP, { reply_markup: LOCATION_KEYBOARD });
         return;
       case '/radius': {
         const kmVal = Number(arg);
         if (!(kmVal >= 0.5 && kmVal <= 20))
           return send(chatId, 'ใช้แบบนี้: /radius 3 (0.5–20 กม.)');
-        q.setRadius.run(Math.round(kmVal * 1000), chatId);
+        await q.setRadius.run(Math.round(kmVal * 1000), chatId);
         return send(chatId, `ตั้งรัศมีเป็น ${kmVal} กม. แล้ว`);
       }
       case '/watch':
         if (arg.length < 2)
           return send(chatId, 'ใช้แบบนี้: /watch ชื่อซอยหรือหมู่บ้าน');
-        q.addKw.run(chatId, arg);
+        await q.addKw.run(chatId, arg);
         return send(
           chatId,
-          `จะแจ้งเมื่อประกาศดับไฟมีคำว่า "${arg}"\n\n${engine.statusFor(q.get.get(chatId), keywords(chatId))}`,
+          `จะแจ้งเมื่อประกาศดับไฟมีคำว่า "${arg}"\n\n${await status(chatId)}`,
         );
       case '/unwatch':
-        q.delKw.run(chatId, arg);
+        await q.delKw.run(chatId, arg);
         return send(chatId, `เลิกติดตาม "${arg}" แล้ว`);
       case '/status':
-        return send(
-          chatId,
-          engine.statusFor(q.get.get(chatId), keywords(chatId)),
-        );
+        return send(chatId, await status(chatId));
       case '/stop':
-        q.setActive.run(0, chatId);
+        await q.setActive.run(0, chatId);
         return send(chatId, 'หยุดแจ้งเตือนแล้ว พิมพ์ /start เพื่อเริ่มใหม่');
       default:
         if (sub.lat == null)
@@ -152,5 +159,29 @@ export function createTelegram({ token, db, config, engine }) {
     }
   }
 
-  return { send, run };
+  /** One webhook update (Vercel). */
+  async function handleUpdate(update) {
+    if (update?.message)
+      await handle(update.message).catch((e) =>
+        console.warn(`[telegram] ${e.message}`),
+      );
+  }
+
+  /** Point Telegram at `url`; `secret` comes back in a header on each call. */
+  const setWebhook = (url, secret) =>
+    call('setWebhook', {
+      url,
+      secret_token: secret,
+      allowed_updates: ['message'],
+    });
+
+  return {
+    send,
+    run,
+    handleUpdate,
+    setWebhook,
+    attach: (e) => {
+      core = e;
+    },
+  };
 }

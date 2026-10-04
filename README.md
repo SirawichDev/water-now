@@ -19,21 +19,23 @@
 ## What it shows
 
 - **Nationwide water levels.** About 800 ThaiWater gauges. The headline counts the gauges over their bank and the provinces they are in; the list is worst first.
-- **Circles you can read.** Each over-bank gauge is a circle sized by the metres of water above the bank. Zoomed in, it fills like a tank against a dashed bank line, and the surface creeps up or sinks with the latest change. Near-bank gauges become small amber tanks.
+- **Circles you can read.** Each over-bank gauge is a circle sized by how far over the bank the water stands (percent of bank-full depth). Zoomed in, it fills like a tank against a dashed bank line, so a higher percent is both a bigger circle and a fuller one, and the surface creeps up or sinks with the latest change. Near-bank gauges become small amber tanks.
 - **Rivers that move (optional).** Dots run along the river or canal a gauge stands on, fast when its level is rising and slow when falling. Off until you switch it on.
 - **Gauge detail.** Metres against the bank, 1-hour and 24-hour change, a 3-day chart, street depth where a resident or a headline reported one (with what can still get through: walking, motorcycle, car, pickup, boat), rain in the next 6 hours, nearby news, the nearest camera, planned outages, hospitals, schools, pharmacies and fuel, places still selling food, and emergency numbers.
 - **72-hour replay** of how many gauges were over their banks, hour by hour.
-- **Reports from people on the spot.** Street depth, trash floating in the water or blocking drains, and whether food is still on sale. Fixed choices only: no typing, no photos. Each report lasts 6 hours.
+- **Hail zones.** When a headline names a Bangkok place with "ลูกเห็บ", or a resident reports hail, a circle opens on the map with ice falling inside it. The panel shows how sure it is (news, residents, the Meteorological Department's warnings, a weather model with a hail forecast) and lets people nearby confirm or deny it. It fades after an hour and is gone after three.
+- **Reports from people on the spot.** Street depth, trash floating in the water or blocking drains, whether food is still on sale, and hail. Fixed choices only: no typing, no photos. Each report lasts 6 hours.
 - **Live cameras.** iTIC road cameras, EGAT dam cameras and Bangkok drainage gauge cameras, played in a panel on the map.
 - **Flood news by place.** Clips from 9 Thai news channels on YouTube, placed on the map when the headline names a Bangkok place.
 - **Planned power cuts** announced by the Metropolitan Electricity Authority.
 - **Telegram alerts** when a gauge near a subscriber rises into near-bank or over-bank, or an outage or flood clip is announced near them.
-- **Light by default, dark dashboard behind a switch, and a bottom sheet on phones.** The original God's Eye View interface stays one tap away as โหมดขั้นสูง (advanced mode).
+- **Light by default, dark dashboard behind a switch, and a bottom sheet on phones.** The original God's Eye View operator interface (advanced mode) is hidden; set `ADVANCED_MODE` in `src/bkk/thaiShell.js` to offer it again.
 
 ## What it does not tell you
 
 - **A gauge measures the river or canal, not the street.** "Over the bank" means the water at the gauge is above its bank; it does not say how deep the road is. Street depth comes only from residents and headlines.
 - **Nothing on the map paints flooded ground.** There is no flood-extent data behind it.
+- **A hail circle is not the storm's edge.** It is the area a headline or a report names, and one TV report is enough to open it.
 - **Resident reports are not verified.** Anyone can report any place.
 - **News pins are Bangkok only.** The place list the headlines are matched against covers Bangkok.
 - **Outages are planned ones in Bangkok, Nonthaburi and Samut Prakan only.** Unplanned cuts and the rest of the country are not covered.
@@ -71,7 +73,7 @@ Optional settings:
 |---|---|---|
 | `alert-service/.env` | `TELEGRAM_BOT_TOKEN` | A bot token from @BotFather. Without it, alerts are only written to the log. |
 | `.env` | `CCTV_THAILAND_ONLY=1` | Loads only the Thai camera sources. |
-| `.env` | `CESIUM_ION_TOKEN`, `GOOGLE_MAPS_API_KEY` | Only needed for advanced mode's 3D globe. The simple map uses OpenStreetMap and needs no key. |
+| `.env` | `CESIUM_ION_TOKEN`, `GOOGLE_MAPS_API_KEY` | Only needed for the hidden advanced mode's 3D globe. The map uses OpenStreetMap and needs no key. |
 
 Copy `alert-service/.env.example` to `alert-service/.env` to start. The alert service keeps its data in `alert-service/data/` (SQLite, git-ignored). Poll intervals and ports are in `alert-service/config.js`.
 
@@ -86,7 +88,8 @@ browser ── map (Vite server, :4173) ──┬── /api/cctv/*  camera prox
                                                            ├─ MEA          planned outages, every 30 min
                                                            ├─ YouTube      news clips, every 10 min
                                                            ├─ Overpass     places, food, river lines (cached 30 days)
-                                                           ├─ Open-Meteo   rain forecast (cached 30 min)
+                                                           ├─ Open-Meteo   rain forecast (cached 30 min), hail model
+                                                           ├─ TMD          weather warnings, every 15 min
                                                            └─ Telegram     alerts
 ```
 
@@ -124,7 +127,8 @@ The project is local-first. The alert service must run all the time and keep a d
 | Planned outages | Metropolitan Electricity Authority announcement pages | Read from the public page |
 | News clips | 9 channels on YouTube (`alert-service/news/channels.json`) | Titles and links only; clips play in YouTube's own player |
 | Places, food, rivers, Bangkok place names | OpenStreetMap via Overpass | © OpenStreetMap contributors, ODbL |
-| Rain forecast | Open-Meteo | |
+| Rain forecast, hail in the DWD ICON model | Open-Meteo | |
+| Weather warnings | Thai Meteorological Department (`tmd.go.th`) | Read from the public warning list |
 | Road cameras | iTIC Foundation feed published by Longdo Traffic | |
 | Dam cameras | EGAT (`egatwater.egat.co.th`) | **Permission to re-show these images has not been asked** |
 | Drainage gauge cameras | Bangkok Drainage and Sewerage Department | Still images; the feed had stopped updating when last checked |
@@ -133,4 +137,4 @@ Check each source's terms before running this as a public service.
 
 ## Credits and licence
 
-น้ำท่วมตอนนี้ is built on **[God's Eye View](https://github.com/bilawalsidhu/gods-eye-view)** by Bilawal Sidhu, released under the MIT License. Its globe, camera pipeline and advanced mode come from there; its original guide is kept at [docs/GODS-EYE-VIEW-README.md](docs/GODS-EYE-VIEW-README.md). This project keeps the same [MIT License](LICENSE). Data from the sources above carries its own terms; see also [DATA_SOURCES.md](DATA_SOURCES.md) for the upstream datasets.
+น้ำท่วมตอนนี้ is built on **[God's Eye View](https://github.com/bilawalsidhu/gods-eye-view)** by Bilawal Sidhu, released under the MIT License. Its globe and camera pipeline come from there (its own operator interface is hidden here); its original guide is kept at [docs/GODS-EYE-VIEW-README.md](docs/GODS-EYE-VIEW-README.md). This project keeps the same [MIT License](LICENSE). Data from the sources above carries its own terms; see also [DATA_SOURCES.md](DATA_SOURCES.md) for the upstream datasets.

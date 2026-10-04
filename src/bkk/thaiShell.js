@@ -1,8 +1,8 @@
 // bkk-watch "simple mode" shell: what a first-time visitor in Thailand needs —
 // how many rivers/canals are over their banks right now, where, and the data
 // to decide whether to go there. It sits over the GEV map and drives its
-// camera and layers; GEV's own operator interface stays one tap away
-// (โหมดขั้นสูง in the menu).
+// camera and layers. GEV's own operator interface (โหมดขั้นสูง) is hidden:
+// see ADVANCED_MODE.
 import * as Cesium from 'cesium';
 import { subscribeBkkUpdates } from '../layers/bkk/source.js';
 import { el, distanceM, clock, dayClock, ago, placeLine } from './dom.js';
@@ -15,6 +15,7 @@ import {
   bubbleRadius,
   trendCounts,
   frameAt,
+  gaugeSeries,
   tankFill,
   circleRadius,
   TANK_MIN_RADIUS,
@@ -33,11 +34,30 @@ import {
 } from './folk.js';
 import { createFolkRow, createSpotCard } from './folkUi.js';
 import { openReportSheet } from './reportSheet.js';
+import { northWater, stopStatus } from './northWater.js';
+import { createNorthOverlay } from './northOverlay.js';
+import {
+  liveZones,
+  pillText,
+  evidence,
+  agoText,
+  hailName,
+  statusText,
+  hailStage,
+  HAIL_SOURCES,
+  HAIL_GONE_MS,
+} from './hail.js';
+import { createHailOverlay } from './hailOverlay.js';
 
 const MODE_KEY = 'bkkwatch:mode';
+// God's Eye View's operator interface is hidden from visitors: no menu entry,
+// no way back into it, and a saved choice of it is ignored. Its code stays,
+// since the flood map is drawn on its globe; set true to offer it again.
+const ADVANCED_MODE = false;
 const THEME_KEY = 'bkkwatch:theme';
 const FOLK_KEY = 'bkkwatch:folk';
 const FLOW_KEY = 'bkkwatch:flow';
+const PREP_KEY = 'bkkwatch:prep';
 const PARKED_KEY = 'bkkwatch:parked';
 const SPOT_GAUGE_M = 10_000; // a spot is named after a gauge this close
 const SPOT_ALERT_M = 5000; // …and shows its level when this close
@@ -47,6 +67,24 @@ const WAVE =
 const NEAR_ME_RADIUS_M = 80_000;
 const COUNTRY_HEIGHT_M = 700_000; // above this the map shows province pills
 const CITY_HEIGHT_M = 400_000; // below this news zones and reports are shown
+
+// Water from the north (northWater.js), as the panel words it.
+const NORTH_TEXT = {
+  prepare: 'น้ำเหนือกำลังไหลลงมา · เตรียมรับมือ',
+  watch: 'น้ำเหนือกำลังไหลลงมา · เฝ้าระวัง',
+};
+const STOP_TEXT = { over: 'ล้นตลิ่ง', near: 'ใกล้ล้น', ok: 'ปกติ' };
+// A cloud dropping three hailstones (hail.js, hailOverlay.js).
+const HAIL_ICON =
+  '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.2a3.2 3.2 0 0 1 .6-6.3 4 4 0 0 1 7.6 1 2.7 2.7 0 0 1 .8 5.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="5" cy="11.5" r="1.4" fill="currentColor"/><circle cx="9" cy="13.2" r="1.4" fill="currentColor"/><circle cx="11.6" cy="10.6" r="1.2" fill="currentColor"/></svg>';
+// What to do if hail falls: general safety advice, not an official list.
+const HAIL_TODO = [
+  'อยู่ในอาคาร ห่างหน้าต่างและกระจก',
+  'ไม่หลบใต้ต้นไม้หรือเพิงสังกะสี เสี่ยงฟ้าผ่า',
+  'ลูกเห็บที่ละลายช้าอาจอุดท่อระบายน้ำ แจ้งได้ในแอป',
+];
+const shortProvince = (p) =>
+  p === 'กรุงเทพมหานคร' ? 'กรุงเทพฯ' : p === 'พระนครศรีอยุธยา' ? 'อยุธยา' : p;
 
 const LAYER_CHIPS = [
   { id: 'bkk-water', label: 'ระดับน้ำ', color: '#D92D20' },
@@ -136,6 +174,10 @@ export function mountThaiShell({
     theme: 'light',
     replay: null, // hour index into the timeline, or null for "now"
     flow: false, // dots running along rivers; off until switched on
+    north: false, // following the water from the north down the river
+    hail: { zones: [], tmd: null }, // from /api/bkk/hail
+    hailOpen: null, // id of the hail zone whose warning is open
+    hailSent: new Map(), // zone id → the answer this visitor already sent
   };
   let detail = null;
   const overlay = createMapOverlay({ viewer });
@@ -252,6 +294,32 @@ export function mountThaiShell({
     { class: 'th-live' },
     el('i'),
     el('span', { text: 'กำลังโหลด…' }),
+  );
+  // Shown only while the water from the north calls for it; opens the warning.
+  const northPill = el(
+    'button',
+    {
+      class: 'th-northpill',
+      type: 'button',
+      hidden: true,
+      onclick: () => (state.north ? exitNorth() : enterNorth()),
+    },
+    el('i'),
+    el('span'),
+  );
+  // Shown while any hail zone is live; opens the strongest one's warning.
+  const hailPill = el(
+    'button',
+    {
+      class: 'th-hailpill',
+      type: 'button',
+      hidden: true,
+      onclick: () =>
+        state.hailOpen ? exitHail() : enterHail(hailZonesNow()[0]?.id),
+    },
+    el('span', { class: 'ico', html: HAIL_ICON }),
+    el('span', { class: 'tt' }),
+    el('em'),
   );
   const searchInput = el('input', {
     type: 'search',
@@ -406,12 +474,14 @@ export function mountThaiShell({
     el('hr'),
     themeMenuItem,
     flowMenuItem,
-    el(
-      'button',
-      { type: 'button', onclick: () => setMode('advanced') },
-      'โหมดขั้นสูง',
-      el('small', { text: 'แผนที่ 3 มิติเต็มรูปแบบ' }),
-    ),
+    ADVANCED_MODE
+      ? el(
+          'button',
+          { type: 'button', onclick: () => setMode('advanced') },
+          'โหมดขั้นสูง',
+          el('small', { text: 'แผนที่ 3 มิติเต็มรูปแบบ' }),
+        )
+      : null,
   );
   const menuBtn = el(
     'button',
@@ -435,6 +505,8 @@ export function mountThaiShell({
     { id: 'th-bar', class: 'th-shell th-only' },
     el('div', { class: 'th-brand', text: 'น้ำท่วมตอนนี้' }),
     livePill,
+    hailPill,
+    northPill,
     search,
     chips,
     themeSeg,
@@ -558,6 +630,56 @@ export function mountThaiShell({
   const mapTint = el('div', { class: 'th-maptint th-only' });
   const dock = createDock({ onIndex: setReplay, onFlow: toggleFlow });
   const folkRow = createFolkRow({ onToggle: toggleFolk, onReport: reportHere });
+  // Following the water from the north: a blue tide around the edges of the
+  // screen and a card that reads the river from Nakhon Sawan to Bangkok.
+  const tide = el(
+    'div',
+    { class: 'th-tide th-only', 'aria-hidden': 'true' },
+    el('i', { class: 'wash' }),
+    el('i', { class: 'dots' }),
+  );
+  // While following, the panel shows the warning instead of the summary.
+  const northView = el('div', {
+    class: 'th-northview',
+    'aria-live': 'polite',
+  });
+  const northLegend = el(
+    'div',
+    { class: 'th-shell th-only th-northlegend', hidden: true },
+    el('i'),
+    el('b', { text: 'แนวแม่น้ำที่น้ำเหนือไหลผ่าน' }),
+    ' คลื่นวิ่งจากเหนือลงใต้ จุดตัวเลขคือสถานีวัดน้ำ % เทียบตลิ่ง แถบสีฟ้าเป็นการเตือน ',
+    el('b', { text: 'ไม่ใช่ขอบเขตน้ำท่วมจริง' }),
+    ' · ข้อมูล สสน. ThaiWater, กรมชลประทาน',
+  );
+  // Hail: a warning view in the panel, a legend for the zone's states, and a
+  // storm-slate glow at the screen edges once a zone is confirmed.
+  const hailView = el('div', { class: 'th-hailview', 'aria-live': 'polite' });
+  const hailLegend = el(
+    'div',
+    { class: 'th-shell th-only th-haillegend', hidden: true },
+    el('h3', { text: 'วงลูกเห็บเปลี่ยนตามหลักฐานและเวลา' }),
+    el(
+      'div',
+      { class: 'states' },
+      [
+        ['confirmed', 'ยืนยันแล้ว', '2 แหล่งขึ้นไป · ขอบจอเตือน'],
+        ['reported', 'มีรายงาน', '1 แหล่ง'],
+        ['fading', 'ผ่านไปนาน', 'เกิน 1 ชม. · จางลง ไม่มีเม็ดตก'],
+        ['gone', 'หายไป', 'ครบ 3 ชม.'],
+      ].map(([cls, b, t]) =>
+        el('div', { class: `st ${cls}` }, el('i'), el('b', { text: b }), t),
+      ),
+    ),
+    el(
+      'p',
+      {},
+      el('b', { text: 'ตรวจจับอย่างไร ' }),
+      'หัวข่าวที่มีคำว่า “ลูกเห็บ” และบอกชื่อย่าน · คนในพื้นที่กด “เห็นลูกเห็บ” · ประกาศเตือนของกรมอุตุฯ · แบบจำลองอากาศ DWD ICON (รหัสพายุมีลูกเห็บ) วงคือพื้นที่ที่แหล่งข่าวพูดถึง ',
+      el('b', { text: 'ไม่ใช่ขอบเขตพายุจริง' }),
+    ),
+  );
+  const frost = el('div', { class: 'th-frost th-only', 'aria-hidden': 'true' });
   const spotCard = createSpotCard({ onSend: sendSpot, onClose: closeSpot });
   document.body.append(
     mapTint,
@@ -566,9 +688,16 @@ export function mountThaiShell({
     chrome,
     folkRow.el,
     spotCard.el,
+    tide,
+    frost,
+    northLegend,
+    hailLegend,
     dock.el,
-    back,
+    ...(ADVANCED_MODE ? [back] : []),
   );
+  panel.append(northView, hailView);
+  const band = createNorthOverlay({ viewer });
+  const hailMap = createHailOverlay({ viewer, onOpen: (id) => enterHail(id) });
 
   addEventListener('click', (e) => {
     if (!search.contains(e.target)) searchResults.hidden = true;
@@ -586,7 +715,7 @@ export function mountThaiShell({
   }
 
   function setMode(mode) {
-    const simple = mode !== 'advanced';
+    const simple = !ADVANCED_MODE || mode !== 'advanced';
     root.classList.toggle('th-simple', simple);
     try {
       localStorage.setItem(MODE_KEY, simple ? 'simple' : 'advanced');
@@ -663,10 +792,20 @@ export function mountThaiShell({
   /** Show the map as it was at one hour of the timeline; null returns to now. */
   function setReplay(index) {
     state.replay = index;
-    // The live dots would contradict the replayed ones.
-    dataManager.layers.get('bkk-water')?.module?.setVisible?.(index == null);
+    // Replaying the country redraws every gauge, so the live dots would
+    // contradict it. Replaying one gauge changes only that gauge.
+    const country = index != null && !dock.gauge;
+    dataManager.layers.get('bkk-water')?.module?.setVisible?.(!country);
     root.classList.toggle('th-replaying', index != null);
     syncOverlay();
+  }
+
+  /** The open gauge at the replayed hour, or null when not replaying one. */
+  function gaugeAtReplay() {
+    const g = dock.gauge;
+    if (!g || state.replay == null || g.id !== state.selectedId) return null;
+    const percent = g.percent?.[state.replay];
+    return percent == null ? null : { percent, t: g.hours[state.replay] };
   }
 
   function locateMe() {
@@ -775,6 +914,7 @@ export function mountThaiShell({
       if (state.selectedId === id && rain)
         dock.setRain({ ...rain, name: st.name });
     });
+    loadGaugeReplay(st);
     renderFocus();
     if (fly) flyToPoint(st.lat, st.lon);
     if (isPhone()) panel.dataset.sheet = 'full';
@@ -792,23 +932,36 @@ export function mountThaiShell({
   }
 
   /**
-   * Fly so the point lands in the part of the map the open players leave
-   * free: beside them when there is room, otherwise above them.
+   * Fly so the point lands in the part of the map the open players (and the
+   * hail legend) leave free: beside them when there is room, otherwise above.
    */
   function flyClearOfPlayers(lat, lon, height) {
     if (isPhone()) return flyToPoint(lat, lon, height);
     const top = bar.getBoundingClientRect().bottom + 64;
     const bottom = dock.el.getBoundingClientRect().top || innerHeight;
-    const left = (isDash() ? main : panel).getBoundingClientRect().right;
+    // In the dashboard an open warning replaces the summary column.
+    const left = Math.max(
+      ...(isDash() ? [main, northView, hailView] : [panel]).map(
+        (n) => n.getBoundingClientRect().right,
+      ),
+    );
     const right = isDash() ? side.getBoundingClientRect().left : innerWidth;
-    const players = [...document.querySelectorAll('.bkk-news-panel')]
+    const players = [
+      ...document.querySelectorAll('.bkk-news-panel, .th-haillegend'),
+    ]
       .filter((n) => !n.hidden)
-      .map((n) => n.getBoundingClientRect());
+      .map((n) => n.getBoundingClientRect())
+      .filter((r) => r.width > 0);
     const edge = Math.min(right, ...players.map((r) => r.left));
     const roof = Math.min(bottom, ...players.map((r) => r.top));
     const beside = edge - left >= 160;
     const x = beside ? (left + edge) / 2 : (left + right) / 2;
     const y = beside ? (top + bottom) / 2 : (top + roof) / 2;
+    return flyPointTo(lat, lon, height, x, y);
+  }
+
+  /** Fly straight down at `height` so the point lands at screen (x, y). */
+  function flyPointTo(lat, lon, height, x, y) {
     // Cesium's field of view spans the longer side of the window.
     const fov = viewer.camera.frustum.fov ?? Math.PI / 3;
     const mPerPx =
@@ -826,11 +979,34 @@ export function mountThaiShell({
     });
   }
 
+  /** The dock replays the open gauge's own last 72 hours. */
+  function loadGaugeReplay(st) {
+    const base = { id: st.id, name: st.name, now: st.storagePercent };
+    dock.setGauge({ ...base, loading: true, hours: [], percent: [] });
+    getJson(`/api/bkk/water/history?id=${encodeURIComponent(st.id)}`)
+      .then((h) =>
+        gaugeSeries(h.points, {
+          bankMsl: Number.isFinite(h.bankMsl) ? h.bankMsl : st.bankMsl,
+          groundMsl: Number.isFinite(h.groundMsl) ? h.groundMsl : st.groundMsl,
+        }),
+      )
+      .catch(() => null)
+      .then((series) => {
+        if (state.selectedId !== st.id) return;
+        dock.setGauge({ ...base, ...(series || { hours: [], percent: [] }) });
+      });
+  }
+
   function showOverview() {
     detail = null;
     state.places = [];
+    dock.setGauge(null);
     side.replaceChildren(list);
-    panel.dataset.view = 'overview';
+    panel.dataset.view = state.hailOpen
+      ? 'hail'
+      : state.north
+        ? 'north'
+        : 'overview';
     dock.setRain(null);
     if (isPhone() && panel.dataset.sheet === 'full')
       panel.dataset.sheet = 'half';
@@ -1192,9 +1368,24 @@ export function mountThaiShell({
     const overN = state.province ? current?.over || 0 : sum.over.length;
     const nearN = state.province ? current?.near || 0 : sum.near.length;
 
+    const north = northWater(state.stations);
+    const northSec =
+      origin || state.province || north.severity === 'none'
+        ? null
+        : northCard(north);
+    const hailSec = origin || state.province ? null : hailCard();
     main.replaceChildren(
-      ...[head, trendSec, provinceSec, focus].filter(Boolean),
+      ...[head, hailSec, northSec, trendSec, provinceSec, focus].filter(
+        Boolean,
+      ),
     );
+    northPill.hidden = north.severity === 'none';
+    northPill.classList.toggle('on', state.north);
+    northPill.lastChild.textContent = state.north
+      ? 'ปิดการเตือนน้ำเหนือ'
+      : NORTH_TEXT[north.severity] || '';
+    if (state.north) renderNorthView(north);
+    syncHail();
     renderFocus();
     list.replaceChildren(
       el(
@@ -1234,6 +1425,494 @@ export function mountThaiShell({
     );
     syncOverlay();
   }
+
+  // ── Water from the north ────────────────────────────────────────────────
+  /** The summary card: the river as a strip of stops, and who is downstream. */
+  function northCard(w) {
+    return el(
+      'div',
+      { class: `th-north ${w.severity}` },
+      el('h2', {}, el('i'), NORTH_TEXT[w.severity]),
+      el(
+        'div',
+        { class: 'th-chain', 'aria-hidden': 'true' },
+        w.stops.map((s, i) =>
+          el('span', {
+            class: `${s.status}${i >= w.first && w.first >= 0 ? ' hit' : ''}`,
+            title: `${s.name} · ${shortProvince(s.province)} · ${Math.round(s.storagePercent)}%`,
+          }),
+        ),
+      ),
+      el(
+        'p',
+        { class: 'th-chainends' },
+        el('span', {
+          text: `แม่น้ำเจ้าพระยา · ${shortProvince(w.stops[0]?.province || '')}`,
+        }),
+        el('span', {
+          text: `${shortProvince(w.stops.at(-1)?.province || '')} ▸`,
+        }),
+      ),
+      w.impact.length
+        ? el(
+            'p',
+            { class: 'th-impact' },
+            'พื้นที่รับน้ำ: ',
+            el('b', { text: w.impact.map(shortProvince).join(' · ') }),
+          )
+        : null,
+      el('button', {
+        class: 'th-btn primary',
+        type: 'button',
+        text: state.north ? 'ปิดการติดตามน้ำเหนือ' : 'ติดตามเส้นทางน้ำเหนือ',
+        onclick: () => (state.north ? exitNorth() : enterNorth()),
+      }),
+    );
+  }
+
+  /** Which preparation steps the visitor has ticked (kept in this browser). */
+  const PREP = [
+    'ยกของมีค่าและปลั๊กไฟขึ้นที่สูง',
+    'ชาร์จโทรศัพท์และพาวเวอร์แบงก์ให้เต็ม',
+    'ใส่เอกสารสำคัญและยาประจำตัวในถุงกันน้ำ',
+    'รู้ทางไปที่สูงหรือศูนย์พักพิงใกล้บ้าน',
+  ];
+  const prepDone = () => {
+    try {
+      return JSON.parse(localStorage.getItem(PREP_KEY)) || [];
+    } catch {
+      return [];
+    }
+  };
+
+  /** The warning that replaces the summary while following. */
+  function renderNorthView(w) {
+    const at = w.stops.find((s) => s.code === 'C.13') || w.stops[0];
+    const worst = [...w.stops].sort(
+      (x, y) => (y.ratio ?? 0) - (x.ratio ?? 0),
+    )[0];
+    const when = w.stops[0]?.observedAt;
+    const done = prepDone();
+    northView.replaceChildren(
+      el(
+        'div',
+        { class: 'th-nvhead' },
+        el(
+          'p',
+          { class: 'th-nveyebrow' },
+          el('i'),
+          `แม่น้ำเจ้าพระยา · ข้อมูล ${when ? `${dayClock(when)} น.` : ''}`,
+        ),
+        el(
+          'h1',
+          {},
+          'น้ำเหนือกำลังไหลลงมา',
+          el('br'),
+          w.severity === 'prepare' ? 'เตรียมรับมือ' : 'เฝ้าระวัง',
+        ),
+        el('p', {
+          text: 'น้ำจากนครสวรรค์ไหลผ่านเขื่อนเจ้าพระยาลงสู่อยุธยาและกรุงเทพฯ ระดับน้ำริมแม่น้ำสูงขึ้นตลอดแนว',
+        }),
+        el('button', {
+          class: 'th-x',
+          type: 'button',
+          'aria-label': 'ปิดการเตือน',
+          text: '×',
+          onclick: () => exitNorth(),
+        }),
+      ),
+      el(
+        'div',
+        { class: 'th-nvfigs' },
+        at?.ratio != null
+          ? el(
+              'div',
+              { class: 'n' },
+              el('b', { text: `${Math.round(at.ratio * 100)}%` }),
+              el('span', {
+                text: `${at.code === 'C.13' ? 'เขื่อนเจ้าพระยาปล่อยน้ำ' : `${at.name} ไหล`} ${Math.round(at.flow).toLocaleString('th-TH')} ม³/วิ ของความจุลำน้ำ`,
+              }),
+            )
+          : null,
+        worst?.ratio != null
+          ? el(
+              'div',
+              { class: worst.ratio > 1 ? 'o' : 'n' },
+              el('b', { text: `${Math.round(worst.ratio * 100)}%` }),
+              el('span', {
+                text: `${shortProvince(worst.province)} (${worst.name}) ${worst.ratio > 1 ? 'น้ำไหลเกินความจุลำน้ำ' : 'ของความจุลำน้ำ'}`,
+              }),
+            )
+          : null,
+      ),
+      el(
+        'div',
+        { class: 'th-nvsec' },
+        el('h2', { text: 'พื้นที่รับน้ำ เรียงจากเหนือลงใต้' }),
+        el(
+          'div',
+          { class: 'th-nvprovs' },
+          w.impact.map((p) => {
+            const over = w.stops.some(
+              (s) => s.province === p && s.status === 'over',
+            );
+            return el('span', {
+              class: over ? 'o' : '',
+              text: shortProvince(p),
+            });
+          }),
+        ),
+      ),
+      el(
+        'div',
+        { class: 'th-nvsec' },
+        el('h2', { text: 'เตรียมตัวตอนนี้ ถ้าบ้านอยู่ริมแม่น้ำ' }),
+        el(
+          'ul',
+          { class: 'th-nvcheck' },
+          PREP.map((text, i) =>
+            el(
+              'li',
+              {},
+              el(
+                'label',
+                {},
+                el('input', {
+                  type: 'checkbox',
+                  checked: done[i] ? '' : null,
+                  onchange: (e) => {
+                    const next = prepDone();
+                    next[i] = e.target.checked;
+                    try {
+                      localStorage.setItem(PREP_KEY, JSON.stringify(next));
+                    } catch {
+                      /* private mode */
+                    }
+                  },
+                }),
+                text,
+              ),
+            ),
+          ),
+        ),
+        el(
+          'p',
+          { class: 'th-nvhow' },
+          el('b', { text: 'ตรวจจับอย่างไร ' }),
+          'อ่านสถานีวัดน้ำของกรมชลประทานบนแม่น้ำเจ้าพระยา 8 จุดจากเหนือลงใต้ทุก 5 นาที เตือน "เตรียมรับมือ" เมื่อมีจุดล้นตลิ่ง และน้ำที่ไหลผ่านนครสวรรค์หรือเขื่อนเจ้าพระยาเกิน 80% ของความจุลำน้ำ',
+        ),
+      ),
+      el(
+        'div',
+        { class: 'th-nvacts' },
+        el('button', {
+          class: 'th-btn primary',
+          type: 'button',
+          text: 'น้ำใกล้ฉัน',
+          onclick: () => {
+            exitNorth();
+            locateMe();
+          },
+        }),
+        el('a', { class: 'th-btn', href: 'tel:1784', text: 'โทร 1784 ปภ.' }),
+      ),
+    );
+  }
+
+  function enterNorth() {
+    const w = northWater(state.stations);
+    if (!w.stops.length) return;
+    if (state.hailOpen) exitHail({ quiet: true });
+    state.north = true;
+    root.classList.add('th-north-on');
+    northLegend.hidden = false;
+    state.selectedId = null;
+    showOverview();
+    if (isPhone()) panel.dataset.sheet = 'half';
+    flyToStations(w.stops);
+  }
+
+  function exitNorth() {
+    state.north = false;
+    root.classList.remove('th-north-on');
+    northLegend.hidden = true;
+    if (panel.dataset.view === 'north') panel.dataset.view = 'overview';
+    render();
+  }
+  addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.north) exitNorth();
+  });
+
+  // ── Hail ────────────────────────────────────────────────────────────────
+  const hailZonesNow = () => liveZones(state.hail.zones, Date.now());
+  const openZone = () =>
+    hailZonesNow().find((z) => z.id === state.hailOpen) || null;
+
+  /** Pill, map zones, screen-edge glow and the open warning, from state. */
+  function syncHail() {
+    const now = Date.now();
+    const zones = hailZonesNow();
+    if (state.hailOpen && !openZone()) exitHail({ quiet: true });
+    const pill = pillText(zones);
+    hailPill.hidden = !pill;
+    if (pill) {
+      hailPill.classList.toggle('on', Boolean(state.hailOpen));
+      hailPill.classList.toggle('confirmed', zones[0].confirmed);
+      hailPill.querySelector('.tt').textContent = state.hailOpen
+        ? 'ปิดการเตือนลูกเห็บ'
+        : pill.title;
+      hailPill.querySelector('em').textContent = state.hailOpen
+        ? ''
+        : pill.status;
+    }
+    hailMap.set(zones, now);
+    frost.classList.toggle(
+      'on',
+      zones.some((z) => z.confirmed && hailStage(z, now) === 'active'),
+    );
+    hailLegend.hidden = !state.hailOpen;
+    const z = openZone();
+    if (z) renderHailView(z, now);
+  }
+
+  /** The summary card: the strongest zone, one line on how sure it is. */
+  function hailCard() {
+    const zones = hailZonesNow();
+    const [z] = zones;
+    if (!z) return null;
+    const now = Date.now();
+    return el(
+      'div',
+      { class: `th-hailcard${z.confirmed ? ' confirmed' : ''}` },
+      el(
+        'h2',
+        {},
+        el('span', { class: 'ico', html: HAIL_ICON }),
+        `ลูกเห็บ · ${hailName(z)}`,
+      ),
+      el('p', {
+        text: `${statusText(z)} · หลักฐาน ${z.count} จาก ${HAIL_SOURCES} · รายงานล่าสุด ${agoText(now - z.lastAt)}${zones.length > 1 ? ` · อีก ${zones.length - 1} พื้นที่` : ''}`,
+      }),
+      el('button', {
+        class: 'th-btn primary',
+        type: 'button',
+        text: 'ดูพื้นที่ลูกเห็บ',
+        onclick: () => enterHail(z.id),
+      }),
+    );
+  }
+
+  /** The warning that replaces the summary while a zone is open. */
+  function renderHailView(z, now = Date.now()) {
+    const age = now - z.lastAt;
+    // The ring fills over the three hours the zone stays on the map.
+    const gone = Math.min(1, age / HAIL_GONE_MS);
+    const sent = state.hailSent.get(z.id);
+    const C = 2 * Math.PI * 16;
+    hailView.replaceChildren(
+      el(
+        'div',
+        { class: 'th-hvhead' },
+        el('button', {
+          class: 'th-x',
+          type: 'button',
+          'aria-label': 'ปิดการเตือน',
+          text: '×',
+          onclick: () => exitHail(),
+        }),
+        el('span', {
+          class: `th-hveyebrow${z.confirmed ? ' confirmed' : ''}`,
+          text: z.confirmed
+            ? `ยืนยันแล้ว · หลักฐาน ${z.count} แหล่ง`
+            : `มีรายงาน ${z.count} แหล่ง · ยังไม่ยืนยัน`,
+        }),
+        el(
+          'h1',
+          {},
+          z.confirmed ? 'ลูกเห็บตก' : 'มีข่าวลูกเห็บตก',
+          el('br'),
+          z.place ? `ย่าน${z.place}` : 'ใกล้จุดที่มีคนรายงาน',
+        ),
+        el('p', {
+          text: z.news[0]
+            ? `${z.news[0].channel} รายงานว่ามีลูกเห็บ${z.confirmed ? ' และมีแหล่งอื่นยืนยัน' : ' ยังไม่มีแหล่งอื่นยืนยัน'}`
+            : `คนในพื้นที่รายงานว่าเห็นลูกเห็บ${z.confirmed ? ' และมีแหล่งอื่นยืนยัน' : ' ยังไม่มีแหล่งอื่นยืนยัน'}`,
+        }),
+      ),
+      el(
+        'div',
+        { class: 'th-hvage' },
+        el('span', {
+          class: 'ring',
+          html: `<svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="none" stroke-width="5" class="bg"/><circle cx="20" cy="20" r="16" fill="none" stroke-width="5" stroke-linecap="round" class="fg" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${(C * (1 - gone)).toFixed(1)}" transform="rotate(-90 20 20)"/></svg>`,
+        }),
+        el(
+          'div',
+          {},
+          el('b', { text: agoText(age) }),
+          el('span', {
+            text: `รายงานล่าสุดเมื่อ ${clock(z.lastAt)} น. · ลูกเห็บมักตกเพียงไม่กี่นาที วงจะจางลงหลัง 1 ชม. และหายไปเมื่อครบ 3 ชม.`,
+          }),
+        ),
+      ),
+      el(
+        'div',
+        { class: 'th-nvsec' },
+        el(
+          'h2',
+          { class: 'th-hvcount' },
+          'หลักฐาน',
+          el('em', { text: `${z.count} จาก ${HAIL_SOURCES}` }),
+        ),
+        el(
+          'ul',
+          { class: 'th-hvev' },
+          evidence(z, state.hail.tmd).map((e) =>
+            el(
+              'li',
+              { class: e.ok ? 'y' : 'n' },
+              el('i', { text: e.ok ? '✓' : '–' }),
+              el(
+                'div',
+                {},
+                el('b', { text: e.title }),
+                e.text ? ` ${e.text}` : null,
+                e.small ? el('small', { text: e.small }) : null,
+              ),
+            ),
+          ),
+        ),
+      ),
+      el(
+        'div',
+        { class: 'th-nvsec' },
+        el('h2', {
+          text: z.place
+            ? `อยู่แถว${z.place}ไหม ช่วยยืนยัน`
+            : 'อยู่แถวนี้ไหม ช่วยยืนยัน',
+        }),
+        el(
+          'div',
+          { class: 'th-hvask' },
+          [
+            ['seen', 'เห็นลูกเห็บที่นี่', 'th-btn primary'],
+            ['none', 'ที่นี่ไม่มี', 'th-btn'],
+          ].map(([answer, text, cls]) =>
+            el('button', {
+              class: cls,
+              type: 'button',
+              text,
+              disabled: sent ? '' : null,
+              'aria-pressed': String(sent === answer),
+              onclick: () => sendHail(z, answer),
+            }),
+          ),
+        ),
+        el('p', {
+          class: 'th-note th-hvsent',
+          role: 'status',
+          text: sent ? 'ขอบคุณ ส่งแล้ว' : '',
+        }),
+      ),
+      el(
+        'div',
+        { class: 'th-nvsec' },
+        el('h2', { text: 'ถ้าลูกเห็บตก' }),
+        el(
+          'ul',
+          { class: 'th-hvtodo' },
+          HAIL_TODO.map((t) => el('li', { text: t })),
+        ),
+      ),
+      el(
+        'div',
+        { class: 'th-nvacts' },
+        z.news[0]
+          ? el('a', {
+              class: 'th-btn',
+              href: z.news[0].url,
+              target: '_blank',
+              rel: 'noopener',
+              text: 'ดูคลิปข่าว',
+            })
+          : null,
+        el('a', {
+          class: 'th-btn',
+          href: 'tel:1182',
+          text: 'โทร 1182 กรมอุตุฯ',
+        }),
+      ),
+    );
+  }
+
+  /** One tap: the visitor confirms or contradicts hail in this zone. */
+  async function sendHail(z, answer) {
+    const status = hailView.querySelector('.th-hvsent');
+    for (const b of hailView.querySelectorAll('.th-hvask button'))
+      b.setAttribute('disabled', '');
+    status.textContent = 'กำลังส่ง…';
+    try {
+      // Reported where the visitor is when we know it and it is in the zone;
+      // otherwise at the zone's centre.
+      const me =
+        state.me &&
+        distanceM(state.me.lat, state.me.lon, z.lat, z.lon) <= z.radiusM * 2
+          ? state.me
+          : z;
+      const res = await fetch('/api/bkk/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lat: me.lat,
+          lon: me.lon,
+          answers: { hail: answer },
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'ส่งไม่สำเร็จ');
+      // Remembered so the note survives the redraw the new report triggers.
+      state.hailSent.set(z.id, answer);
+      renderHailView(z);
+    } catch (e) {
+      status.textContent = e.message;
+      for (const b of hailView.querySelectorAll('.th-hvask button'))
+        b.removeAttribute('disabled');
+    }
+  }
+
+  function enterHail(id) {
+    const z = hailZonesNow().find((x) => x.id === id);
+    if (!z) return;
+    if (state.north) exitNorth();
+    state.hailOpen = z.id;
+    root.classList.add('th-hail-on');
+    state.selectedId = null;
+    showOverview();
+    if (isPhone()) panel.dataset.sheet = 'half';
+    const height = Math.max(18_000, z.radiusM * 9);
+    // On phones the zone goes in the strip between the floating chips and
+    // the half-open sheet (46% of the screen).
+    if (isPhone())
+      flyPointTo(
+        z.lat,
+        z.lon,
+        height,
+        innerWidth / 2,
+        (150 + innerHeight * 0.54) / 2,
+      );
+    else flyClearOfPlayers(z.lat, z.lon, height);
+  }
+
+  function exitHail({ quiet = false } = {}) {
+    state.hailOpen = null;
+    root.classList.remove('th-hail-on');
+    hailLegend.hidden = true;
+    if (panel.dataset.view === 'hail') panel.dataset.view = 'overview';
+    if (!quiet) render();
+  }
+  addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.hailOpen) exitHail();
+  });
 
   // ── Dashboard: one gauge in figures ─────────────────────────────────────
   /** The selected gauge, else the nearest or worst one in the current view. */
@@ -1567,7 +2246,10 @@ export function mountThaiShell({
 
   // ── Map markers ─────────────────────────────────────────────────────────
   /** The selected gauge's figure, hung from its point on a leader line. */
-  function pinHtml(st) {
+  function pinHtml(st, past = null) {
+    // While its replay plays, the pin shows the replayed hour instead.
+    if (past)
+      return `<i></i><span class="bd"><b>${Math.round(past.percent)}%</b><small>ของตลิ่ง</small></span><span class="tx"><b>${esc(st.name)}</b><small>ย้อนหลัง · ${clock(past.t)} น. ${new Date(past.t).toLocaleDateString('th-TH', { timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short' })}</small></span>`;
     const d = overMetres(st);
     const cm = Math.round(Math.abs(st.changeM || 0) * 100);
     const move =
@@ -1587,7 +2269,11 @@ export function mountThaiShell({
   function syncOverlay() {
     const simple = root.classList.contains('th-simple');
     const height = viewer.camera.positionCartographic.height;
-    const replaying = simple && state.replay != null && dock.timeline;
+    const replaying =
+      simple && state.replay != null && !dock.gauge && dock.timeline;
+    // Replaying one gauge: it alone is drawn at the replayed hour.
+    const past = simple ? gaugeAtReplay() : null;
+    const pastId = past ? state.selectedId : null;
     const water = simple && layerOn('bkk-water') && !replaying;
     const over = water
       ? state.stations.filter((s) => !s.stale && s.level >= 5)
@@ -1609,14 +2295,15 @@ export function mountThaiShell({
                   lat: f.lat,
                   lon: f.lon,
                   className: 'th-bub core',
-                  style: `--r:${bubbleRadius(f.metres ?? 0.3, height).toFixed(1)}px`,
+                  style: `--r:${bubbleRadius(f.percent, height).toFixed(1)}px`,
                 }
               : { id: f.id, lat: f.lat, lon: f.lon, className: 'th-dot' },
           )
         : [],
     );
 
-    // Circle size is metres over the bank; a solid circle is still rising.
+    // Circle size is how far over the bank the water stands (percent of
+    // bank-full depth); a solid circle is still rising.
     // Once a circle is big enough to read, it fills like a tank instead: the
     // water stands at the gauge's level against a dashed bank line, and its
     // surface creeps up or sinks with the latest change.
@@ -1627,24 +2314,45 @@ export function mountThaiShell({
         ? state.stations.filter((s) => !s.stale && s.level === 4)
         : [];
     const radius = new Map([
-      ...over.map((s) => [s.id, circleRadius(overMetres(s) ?? 0.3, height)]),
+      ...over.map((s) => [s.id, circleRadius(s.storagePercent, height)]),
       ...near.map((s) => [s.id, TANK_MIN_RADIUS]),
     ]);
+    const pastSt = past && state.stations.find((s) => s.id === pastId);
     const isTank = (s) => radius.get(s.id) >= TANK_MIN_RADIUS;
     overlay.set(
       'bubbles',
-      [...near, ...over].map((s) => {
-        const move = s.changeM > 0 ? ' up' : s.changeM < 0 ? ' down' : '';
-        const tone = s.level >= 5 ? '' : ' near';
-        return {
-          id: s.id,
-          lat: s.lat,
-          lon: s.lon,
-          className: isTank(s) ? `th-bub tank${tone}${move}` : `th-bub${move}`,
-          style: `--r:${radius.get(s.id).toFixed(1)}px;--fill:${tankFill(s.storagePercent).toFixed(0)}%`,
-          html: isTank(s) ? `<span><u>${WAVE}</u><s></s></span>` : '',
-        };
-      }),
+      [...near, ...over]
+        .filter((s) => s.id !== pastId)
+        .map((s) => {
+          const move = s.changeM > 0 ? ' up' : s.changeM < 0 ? ' down' : '';
+          const tone = s.level >= 5 ? '' : ' near';
+          return {
+            id: s.id,
+            lat: s.lat,
+            lon: s.lon,
+            className: isTank(s)
+              ? `th-bub tank${tone}${move}`
+              : `th-bub${move}`,
+            style: `--r:${radius.get(s.id).toFixed(1)}px;--fill:${tankFill(s.storagePercent).toFixed(0)}%`,
+            html: isTank(s) ? `<span><u>${WAVE}</u><s></s></span>` : '',
+          };
+        }),
+    );
+
+    overlay.set(
+      'pastgauge',
+      pastSt
+        ? [
+            {
+              id: pastSt.id,
+              lat: pastSt.lat,
+              lon: pastSt.lon,
+              className: `th-bub tank past${past.percent > 100 ? '' : ' near'}`,
+              style: `--r:${Math.max(TANK_MIN_RADIUS + 1, circleRadius(past.percent, height)).toFixed(1)}px;--fill:${tankFill(past.percent).toFixed(0)}%`,
+              html: `<span><u>${WAVE}</u><s></s></span>`,
+            },
+          ]
+        : [],
     );
 
     // Dots run along the open gauge's river, and along the river of every
@@ -1662,20 +2370,50 @@ export function mountThaiShell({
         s.lon,
       ) <=
       height * 1.2;
-    const flowing =
-      water && state.flow && height < TANK_ZOOM_M
-        ? [...new Set([opened, ...over, ...near].filter(Boolean))].filter(
-            inView,
-          )
-        : [];
+    // While following the water from the north, its river always flows and
+    // is covered by the band, from above Nakhon Sawan to the river mouth.
+    const chain = simple && state.north ? northWater(state.stations).stops : [];
+    band.set(
+      chain.length > 1
+        ? [
+            [100.05, 15.92],
+            ...chain.map((s) => [s.lon, s.lat]),
+            [100.585, 13.545],
+          ]
+        : null,
+    );
+    const flowing = [
+      ...new Set([
+        ...chain,
+        ...(water && state.flow && height < TANK_ZOOM_M
+          ? [opened, ...over, ...near].filter(Boolean).filter(inView)
+          : []),
+      ]),
+    ];
     flow.set(
       flowing.flatMap((s) =>
-        (riverOf(s, s === opened) || []).map((river, i) => ({
-          id: `${s.id}:${i}`,
-          points: river.points,
-          pace: s.changeM > 0 ? 'up' : s.changeM < 0 ? 'down' : 'flat',
-        })),
+        (riverOf(s, s === opened || chain.includes(s)) || []).map(
+          (river, i) => ({
+            id: `${s.id}:${i}`,
+            points: river.points,
+            pace: s.changeM > 0 ? 'up' : s.changeM < 0 ? 'down' : 'flat',
+          }),
+        ),
       ),
+    );
+
+    overlay.set(
+      'north',
+      chain.map((s, i) => ({
+        id: `n:${s.id}`,
+        lat: s.lat,
+        lon: s.lon,
+        className: `th-pill northstop ${stopStatus(s)}`,
+        html: `<i>${i + 1}</i>${esc(shortProvince(s.province))} <b>${Math.round(s.storagePercent)}%</b>`,
+        priority: 5000 - i,
+        collide: true,
+        onClick: () => select(s.id, { fly: false }),
+      })),
     );
 
     // Ripples mark the worst gauges from afar and the rising ones up close;
@@ -1685,7 +2423,7 @@ export function mountThaiShell({
         ? [...over]
             .sort((a, b) => b.storagePercent - a.storagePercent)
             .slice(0, 18)
-        : over.filter((s) => s.changeM > 0 && !isTank(s));
+        : over.filter((s) => s.changeM > 0 && !isTank(s) && s.id !== pastId);
     overlay.set(
       'ripples',
       rippling.map((s, i) => ({
@@ -1838,8 +2576,10 @@ export function mountThaiShell({
               id: 'pin',
               lat: sel.lat,
               lon: sel.lon,
-              className: `th-pin${sel.level >= 5 ? ' over' : sel.level === 4 ? ' near' : ''}`,
-              html: pinHtml(sel),
+              className: past
+                ? `th-pin${past.percent > 100 ? ' over' : past.percent > 70 ? ' near' : ''}`
+                : `th-pin${sel.level >= 5 ? ' over' : sel.level === 4 ? ' near' : ''}`,
+              html: pinHtml(sel, past),
               priority: 9999,
             },
           ]
@@ -1931,6 +2671,22 @@ export function mountThaiShell({
       })
       .catch(() => {})
       .then(() => detail?.refresh());
+  const loadHail = () =>
+    getJson('/api/bkk/hail')
+      .then((d) => {
+        state.hail = { zones: d.zones || [], tmd: d.tmd || null };
+      })
+      .catch(() => {})
+      .then(() => {
+        if (!state.selectedId) render();
+        else syncHail();
+      });
+  // Ages and stages move with the clock, not only with new data.
+  setInterval(() => {
+    if (!state.hail.zones.length) return;
+    if (!state.selectedId) render();
+    else syncHail();
+  }, 60_000);
   function loadReports() {
     return getJson('/api/bkk/reports')
       .then((d) => {
@@ -1964,11 +2720,12 @@ export function mountThaiShell({
     if (kind === 'news') loadNews();
     if (kind === 'outages') loadOutages();
     if (kind === 'reports') loadReports();
+    if (kind === 'hail') loadHail();
   });
 
   let savedMode = 'simple';
   try {
-    savedMode = localStorage.getItem(MODE_KEY) || 'simple';
+    if (ADVANCED_MODE) savedMode = localStorage.getItem(MODE_KEY) || 'simple';
   } catch {
     /* default */
   }
@@ -2006,6 +2763,7 @@ export function mountThaiShell({
   loadNews();
   loadOutages();
   loadReports();
+  loadHail();
 
   // Dev-only QA handle: lets browser tests read which layers are on.
   if (import.meta.env?.DEV) globalThis.__bkkShellQa = { dataManager, parked };

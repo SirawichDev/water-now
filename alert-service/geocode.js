@@ -1,4 +1,4 @@
-// Nominatim geocoding with a permanent SQLite cache (misses included) and the
+// Nominatim geocoding with a permanent database cache (misses included) and the
 // public instance's 1 request/second limit enforced by a serial queue.
 import { geocodeCandidates } from './sources/mea.js';
 
@@ -7,17 +7,18 @@ const GAP_MS = 1100;
 const squash = (s) => String(s || '').replace(/\s+/g, '');
 
 export function createGeocoder({ db, userAgent, fetchImpl = fetch }) {
-  const getCached = db.prepare(
-    'SELECT lat, lon, display FROM geocache WHERE query = ?',
-  );
-  const putCached = db.prepare(
-    'INSERT OR REPLACE INTO geocache (query, lat, lon, display, fetched_at) VALUES (?, ?, ?, ?, ?)',
-  );
+  const getCached = (query) =>
+    db.get('SELECT lat, lon, display FROM geocache WHERE query = ?', query);
+  const putCached = (...row) =>
+    db.run(
+      'INSERT INTO geocache (query, lat, lon, display, fetched_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (query) DO UPDATE SET lat = excluded.lat, lon = excluded.lon, display = excluded.display, fetched_at = excluded.fetched_at',
+      ...row,
+    );
   let queue = Promise.resolve();
   let lastCall = 0;
 
   async function lookup(query) {
-    const hit = getCached.get(query);
+    const hit = await getCached(query);
     if (hit) return hit.lat == null ? null : hit;
     const run = async () => {
       const wait = lastCall + GAP_MS - Date.now();
@@ -41,7 +42,7 @@ export function createGeocoder({ db, userAgent, fetchImpl = fetch }) {
             display: first.display_name,
           }
         : { lat: null, lon: null, display: null };
-      putCached.run(query, row.lat, row.lon, row.display, Date.now());
+      await putCached(query, row.lat, row.lon, row.display, Date.now());
       return row.lat == null ? null : row;
     };
     const p = queue.then(run, run);

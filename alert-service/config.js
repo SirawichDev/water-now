@@ -28,6 +28,15 @@ export const config = Object.freeze({
   outageReminderMs: num(process.env.OUTAGE_REMINDER_MS, 60 * 60_000),
   newsPollMs: num(process.env.NEWS_POLL_MS, 10 * 60_000),
   newsEnabled: process.env.NEWS_ENABLED !== '0',
+  hailPollMs: num(process.env.HAIL_POLL_MS, 5 * 60_000),
+  // Postgres (Vercel, via the Neon integration); SQLite at dbPath without it.
+  databaseUrl: process.env.DATABASE_URL || process.env.POSTGRES_URL || '',
+  // Guards /api/bkk/cron, the endpoint an external scheduler calls.
+  cronSecret: process.env.CRON_SECRET || '',
+  // Telegram sends it back on every webhook call (Vercel only).
+  telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '',
+  // Keeps report sender hashes the same across serverless instances.
+  reportSalt: process.env.REPORT_SALT || '',
   userAgent:
     'bkk-watch/0.1 (local dev; github.com/bilawalsidhu/gods-eye-view fork)',
 });
